@@ -4,8 +4,17 @@
 
 package database
 
+import (
+	"database/sql"
+)
+
 type Config struct {
 	ID           int64
 	ClientSecret string
 	ClientID     string
+	RedirectUri  string
+	Authorized   bool
+	AccessToken  sql.NullString
+	RefreshToken sql.NullString
+	ExpiresAt    sql.NullString
 }

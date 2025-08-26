@@ -7,34 +7,77 @@ package database
 
 import (
 	"context"
+	"database/sql"
 )
 
 const getClientInfo = `-- name: GetClientInfo :one
-SELECT client_secret, client_id FROM config WHERE id = 1
+SELECT client_secret, client_id, redirect_uri, authorized, access_token, refresh_token, expires_at FROM config WHERE id = 1
 `
 
 type GetClientInfoRow struct {
 	ClientSecret string
 	ClientID     string
+	RedirectUri  string
+	Authorized   bool
+	AccessToken  sql.NullString
+	RefreshToken sql.NullString
+	ExpiresAt    sql.NullString
 }
 
 func (q *Queries) GetClientInfo(ctx context.Context) (GetClientInfoRow, error) {
 	row := q.db.QueryRowContext(ctx, getClientInfo)
 	var i GetClientInfoRow
-	err := row.Scan(&i.ClientSecret, &i.ClientID)
+	err := row.Scan(
+		&i.ClientSecret,
+		&i.ClientID,
+		&i.RedirectUri,
+		&i.Authorized,
+		&i.AccessToken,
+		&i.RefreshToken,
+		&i.ExpiresAt,
+	)
 	return i, err
 }
 
 const insertConfig = `-- name: InsertConfig :exec
-INSERT INTO config (client_secret, client_id) VALUES (?, ?)
+INSERT INTO config (client_secret, client_id, redirect_uri, authorized) VALUES (?, ?, ?, ?)
 `
 
 type InsertConfigParams struct {
 	ClientSecret string
 	ClientID     string
+	RedirectUri  string
+	Authorized   bool
 }
 
 func (q *Queries) InsertConfig(ctx context.Context, arg InsertConfigParams) error {
-	_, err := q.db.ExecContext(ctx, insertConfig, arg.ClientSecret, arg.ClientID)
+	_, err := q.db.ExecContext(ctx, insertConfig,
+		arg.ClientSecret,
+		arg.ClientID,
+		arg.RedirectUri,
+		arg.Authorized,
+	)
+	return err
+}
+
+const updateTokens = `-- name: UpdateTokens :exec
+UPDATE config
+SET
+    access_token = ?,
+    refresh_token = ?,
+    expires_at = ?,
+    authorized = 1
+WHERE
+    id = 1
+`
+
+type UpdateTokensParams struct {
+	AccessToken  sql.NullString
+	RefreshToken sql.NullString
+	ExpiresAt    sql.NullString
+}
+
+func (q *Queries) UpdateTokens(ctx context.Context, arg UpdateTokensParams) error {
+	_, err := q.db.ExecContext(ctx, updateTokens, arg.AccessToken, arg.RefreshToken, arg.ExpiresAt)
 	return err
 }
