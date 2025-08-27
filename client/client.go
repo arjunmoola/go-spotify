@@ -261,18 +261,9 @@ func callbackHandler(c *Client, respCh chan *SpotifyAuthorizationResponse) http.
 		req.Header.Set("content-type", "application/x-www-form-urlencoded")
 		req.Header.Set("Authorization", encodedClientInfo)
 
-		resp, err := c.client.Do(req)
-
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		defer resp.Body.Close()
-
 		authorizationResp := SpotifyAuthorizationResponse{}
 
-		if err := json.NewDecoder(resp.Body).Decode(&authorizationResp); err != nil {
+		if err := c.fetchResponse(req, &authorizationResp); err != nil {
 			log.Println(err)
 			return
 		}
@@ -302,34 +293,13 @@ func (c *Client) RefreshToken(accessToken string, refreshToken string, id string
 	req.Header.Set("content-type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", encodedClientInfo)
 
-	resp, err := c.client.Do(req)
-
-	if err != nil {
-		return nil, err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusBadRequest {
-		return nil, fmt.Errorf("http bad request")
-	}
-
 	var rsp SpotifyRefreshTokenResponse
 
-	data, err := io.ReadAll(resp.Body)
-
-	if err != nil {
+	if err := c.fetchResponse(req, &rsp); err != nil {
 		return nil, err
 	}
 
-	if err := json.Unmarshal(data, &rsp); err != nil {
-		return nil, err
-	}
-
-	fmt.Println(rsp)
-
-	return &rsp, err
-
+	return &rsp, nil
 }
 
 func encodeClientInfo(id, secret string) string {
@@ -356,24 +326,11 @@ func (c *Client) GetCurrentUsersPlaylists(accessToken string, limit int, offset 
 		return nil, err
 	}
 
-	req.Header.Set("Authorization", "Bearer " + accessToken)
+	setAuthorizationHeader(req, accessToken)
 
-	resp, err := c.client.Do(req)
-
-	if err != nil {
-		return nil, err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusBadRequest {
-		return nil, fmt.Errorf("http bad request")
-	}
-
-	//playlistResp := pb.GetCurrentUsersPlaylistsResponse{}
 	playlistResp := types.CurrentUsersPlaylistResponse{}
 
-	if err := json.NewDecoder(resp.Body).Decode(&playlistResp); err != nil {
+	if err := c.fetchResponse(req, &playlistResp); err != nil {
 		return nil, err
 	}
 
@@ -393,19 +350,11 @@ func (c *Client) GetCurrentUserProfile(accessToken string) (*types.UserProfile, 
 		return nil, err
 	}
 
-	req.Header.Set("Authorization", "Bearer " + accessToken)
-
-	resp, err := c.client.Do(req)
-
-	if err != nil {
-		return nil, err
-	}
-
-	defer resp.Body.Close()
+	setAuthorizationHeader(req, accessToken)
 
 	profile := types.UserProfile{}
 
-	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
+	if err := c.fetchResponse(req, &profile); err != nil {
 		return nil, err
 	}
 
@@ -431,24 +380,11 @@ func (c *Client) GetUsersTopTracks(accessToken string) (*types.UsersTopTracks, e
 		return nil, err
 	}
 
-
-	req.Header.Set("Authorization", "Bearer " + accessToken)
-
-	resp, err := c.client.Do(req)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode == http.StatusBadRequest {
-		return nil, fmt.Errorf("bad request")
-	}
-
-	defer resp.Body.Close()
+	setAuthorizationHeader(req, accessToken)
 
 	var topTracks types.UsersTopTracks
 
-	if err := json.NewDecoder(resp.Body).Decode(&topTracks); err != nil {
+	if err := c.fetchResponse(req, &topTracks); err != nil {
 		return nil, err
 	}
 
@@ -474,26 +410,261 @@ func (c *Client) GetUsersTopArtists(accessToken string) (*types.UsersTopArtists,
 		return nil, err
 	}
 
+	setAuthorizationHeader(req, accessToken)
+
+	var topArtists types.UsersTopArtists
+
+	if err := c.fetchResponse(req, &topArtists); err != nil {
+		return nil, err
+	}
+
+	return &topArtists, nil
+}
+
+func (c *Client) GetPlaybackStateTrack(accessToken string) (*types.PlayBackStateTrack, error) {
+	path, err := url.JoinPath(spotifyWebApiUrl, "player")
+
+	if err != nil {
+		return nil, err
+	}
+
+	values := make(url.Values)
+	values.Set("market", "US")
+
+	u, err := url.Parse(path)
+
+	if err != nil {
+		return nil, err
+	}
+	u.RawQuery = values.Encode()
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	setAuthorizationHeader(req, accessToken)
+
+	rsp := types.PlayBackStateTrack{}
+
+	if err := c.fetchResponse(req, &rsp); err != nil {
+		return nil, err
+	}
+
+	return &rsp, nil
+}
+
+type SpotifyError struct {
+	Status int `json:"status"`
+	Message string `json:"message"`
+}
+
+func (s SpotifyError) Error() string {
+	return fmt.Sprintf("status: %d, message: %s", s.Status, s.Message)
+}
+
+func (c *Client) TransferPlayback(accessToken string, deviceId string, play bool) error {
+	payload := types.TransferPlaybackRequest{
+		DeviceIds: []string{ deviceId },
+		Play: play,
+	}
+
+	data, err := json.Marshal(payload)
+
+	if err != nil {
+		return err
+	}
+
+	buf := bytes.NewBuffer(data)
+
+	path, err := url.JoinPath(spotifyWebApiUrl, "player")
+	
+	if err != nil {
+		return err
+	}
+
+	u, err := url.Parse(path)
+
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("PUT", u.String(), buf)
+
+	if err != nil {
+		return err
+	}
 
 	req.Header.Set("Authorization", "Bearer " + accessToken)
+	req.Header.Set("content-type", "application/json")
 
+	return c.fetchResponse(req, nil)
+}
+
+func (c *Client) GetAvailableDevices(accessToken string) (*types.AvailableDevices, error) {
+	path, err := url.JoinPath(spotifyWebApiUrl, "player", "devices")
+
+	if err != nil {
+		return nil, err
+	}
+
+	u, err := url.Parse(path)
+
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	setAuthorizationHeader(req, accessToken)
+
+	var devices types.AvailableDevices
+
+	if err := c.fetchResponse(req, &devices); err != nil {
+		return nil, err
+	}
+
+	return &devices, nil
+}
+
+func (c *Client) GetCurrentlyPlayingTrack(accessToken string) (any, error) {
+	path, err := url.JoinPath(spotifyWebApiUrl, "player", "currently-playing")
+
+	if err != nil {
+		return nil, err
+	}
+
+	values := make(url.Values)
+	values.Set("market", "US")
+
+	u, err := url.Parse(path)
+
+	if err != nil {
+		return nil, err
+	}
+	u.RawQuery = values.Encode()
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	setAuthorizationHeader(req, accessToken)
+
+	var obj map[string]any
+
+	data, err := c.fetchResponseBytes(req)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil, fmt.Errorf("unable to marshal data into obj %v", err)
+	}
+
+	val, ok := obj["currently_playing_type"]
+
+	if !ok {
+		return nil, fmt.Errorf("track or episode could not be found")
+	}
+
+	playingType, ok := val.(string)
+
+	if !ok {
+		return nil, fmt.Errorf("incorrect value for the specified key")
+	}
+
+	if playingType == "track" {
+		var track types.CurrentlyPlayingTrack
+
+		if err := json.Unmarshal(data, &track); err != nil {
+			return nil, fmt.Errorf("err in unmarshaling currently playing track %v", err)
+		}
+
+		return &track, nil
+	} else {
+		return nil, fmt.Errorf("invalid type")
+	}
+}
+
+func (c *Client) fetchResponse(req *http.Request, v any) error {
+	resp, err := c.client.Do(req)
+
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	if v == nil {
+		return checkResponseCode(resp)
+	}
+
+	return handleResponse(resp, v)
+}
+
+func (c *Client) fetchResponseBytes(req *http.Request) ([]byte, error) {
 	resp, err := c.client.Do(req)
 
 	if err != nil {
 		return nil, err
 	}
 
-	if resp.StatusCode == http.StatusBadRequest {
-		return nil, fmt.Errorf("bad request")
-	}
-
 	defer resp.Body.Close()
 
-	var topArtists types.UsersTopArtists
-
-	if err := json.NewDecoder(resp.Body).Decode(&topArtists); err != nil {
+	if err := checkResponseCode(resp); err != nil {
 		return nil, err
 	}
 
-	return &topArtists, nil
+	data, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return nil, fmt.Errorf("error reading resp body %v", err)
+	}
+
+	return data, nil
+}
+
+func handleResponse(resp *http.Response, v any) error {
+	if err := checkResponseCode(resp); err != nil {
+		return err
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func checkResponseCode(resp *http.Response) error {
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	if resp.StatusCode == http.StatusNoContent {
+		return SpotifyError {
+			Status: http.StatusNoContent,
+			Message: "no content available",
+		}
+	}
+
+	msg := SpotifyError{}
+
+	if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil {
+		return fmt.Errorf("unable to read resp body for err msg %v", err)
+	}
+
+	return msg
+}
+
+func setAuthorizationHeader(req *http.Request, accessToken string) {
+	req.Header.Set("Authorization", "Bearer " + accessToken)
 }

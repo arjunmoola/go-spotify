@@ -145,3 +145,98 @@ type Track struct {
 	Uri string `json:"uri"`
 	IsLocal bool `json:"is_local"`
 }
+
+type PlayBackStateTrack struct {
+	Device *Device `json:"device"`
+	RepeatState string `json:"repeat_state"`
+	ShuffleState bool `json:"shuffle_state"`
+	Context *Context `json:"context"`
+	Timestamp int `json:"timestamp"`
+	ProgressMs int `json:"progress_ms"`
+	IsPlaying bool `json:"is_playing"`
+	Item *Track `json:"track"`
+	CurrentyPlayingType string `json:"currently_playing_type"`
+	Actions *PlaybackAction `json:"actions"`
+}
+
+type CurrentlyPlayingTrack struct {
+	Device *Device `json:"device"`
+	RepeatState string `json:"repeat_state"`
+	ShuffleState bool `json:"shuffle_state"`
+	Context *Context `json:"context"`
+	Timestamp int `json:"timestamp"`
+	ProgressMs int `json:"progress_ms"`
+	IsPlaying bool `json:"is_playing"`
+	Item *Track `json:"track"`
+	CurrentyPlayingType string `json:"currently_playing_type"`
+	Actions *PlaybackAction `json:"actions"`
+}
+
+type PlaybackAction struct {
+	InterruptingPlayback bool `json:"interrupting_playback"`
+	Pausing bool `json:"pausing"`
+	Resuming bool `json:"resuming"`
+	Seeking bool `json:"seeking"`
+	SkippingNext bool `json:"skipping_next"`
+	SkippingPrev bool `json:"skipping_prev"`
+	TogglingRepeatContext bool `json:"toggling_repeat_context"`
+	TogglingShuffle bool `json:"toggling_shuffle"`
+	TogglingRepeatTrack bool `json:"toggling_repeat_track"`
+	TransferringPlayback bool `json:"transferring_playback"`
+}
+
+type Context struct {
+	Type string `json:"type"`
+	Href string `json:"href"`
+	Uri string `json:"uri"`
+}
+
+type AvailableDevices struct {
+	Devices []*Device `json:"devices"`
+}
+
+type Device struct {
+	Id string `json:"id"`
+	IsActive bool `json:"is_active"`
+	IsPrivateSession bool `json:"is_private_session"`
+	IsRestricted bool `json:"is_restricted"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	VolumePercent int `json:"int,omitempty"`
+	SupportsVolumne bool `json:"supports_volume"`
+}
+
+type TransferPlaybackRequest struct {
+	DeviceIds []string `json:"device_ids"`
+	Play bool `json:"play"`
+}
+
+type StartResumePlaybackRequest struct {
+	ContextUri string `json:"context_uri"`
+	Uris []string `json:"context_uris"`
+	Offset *StartResumePlaybackOffset `json:"offset,omitempty"`
+}
+
+type StartResumePlaybackOffset struct {
+	Position string `json:"position,omitempty"`
+	Uri string `json:"uri,omitempty"`
+}
+
+type RecentlyPlayedTracks struct {
+	Href string `json:"href"`
+	Limit int `json:"limit"`
+	Next string `json:"next"`
+	Total int `json:"total"`
+	Cursors *Cursors `json:"cursors"`
+}
+
+type PlayHistoryObject struct {
+	Track *Track `json:"track"`
+	PlayedAt string `json:"played_at"`
+	Context *Context `json:"context"`
+}
+
+type Cursors struct {
+	After string `json:"after"`
+	Before string `json:"before"`
+}

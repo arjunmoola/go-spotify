@@ -111,6 +111,10 @@ const (
 	right
 )
 
+type Position struct {
+	Row, Col int
+}
+
 func (m *Model) updateCursor(dir string) {
 	cursor := m.cursor
 	i := cursor/m.cols

@@ -5,6 +5,7 @@ import (
 	"strings"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"go-spotify/types"
 )
 
 type Batch []tea.Cmd
@@ -23,6 +24,8 @@ func (a *App) Init() tea.Cmd {
 	b.Append(GetUsersTopArtists(a))
 	b.Append(GetUserProfile(a))
 	b.Append(GetUsersPlaylist(a))
+	b.Append(GetAvailableDevices(a))
+	b.Append(GetCurrentlyPlayingTrack(a))
 	return b.Cmd()
 }
 
@@ -52,6 +55,16 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m := a.grid.At(0, 2).(spotifyList)
 		m.SetItemsFromResult(msg.result)
 		a.grid.SetModel(m, 0, 2)
+	case GetCurrentlyPlayingTrackResult:
+		if msg.result != nil {
+			a.msgs = append(a.msgs, fmt.Sprintf("got valid result"))
+		}
+	case GetAvailableDevicesResult:
+		//a.msgs = append(a.msgs, fmt.Sprintf("num of devices: %d", len(msg.result.Devices)))
+		b.Append(a.devices.SetItemsFromResult(msg.result))
+		m := a.grid.At(0, 3).(spotifyList)
+		m.SetItemsFromResult(msg.result)
+		a.grid.SetModel(m, 0, 3)
 	case AuthorizationResponse:
 	case UpdateConfigResult:
 		a.msgs = append(a.msgs, "config updated")
@@ -114,6 +127,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case playlistItem:
 					a.info.artistName = item.playlist.Name
 					a.info.description = item.playlist.Description
+				case deviceItem:
+					a.info.deviceName = item.device.Name
+					a.info.deviceId = item.device.Id
+					a.info.deviceType = item.device.Type
+					a.info.isActive = item.device.IsActive
 				}
 			}
 		}
@@ -147,13 +165,20 @@ func (a *App) View() string {
 	//builder.WriteString(strings.Join(a.msgs, "\n"))
 	//builder.WriteRune('\n')
 
+	msgsView := strings.Join(a.msgs, "\n")
+
 	s := lipgloss.JoinHorizontal(lipgloss.Left, a.grid.View(), a.info.View())
+	s = lipgloss.JoinVertical(lipgloss.Center, s, msgsView)
+
+	errView := ""
+
+	for _, err := range a.err {
+		errView += err.Error() + "\n"
+	}
+
+	s = lipgloss.JoinVertical(lipgloss.Center, s, errView)
 
 	builder.WriteString(s)
-
-	//for _, err := range a.err {
-	//	fmt.Fprintln(builder, err)
-	//}
 
 	
 	//fmt.Fprintln(builder, "press ctrl+c to quit")
@@ -162,11 +187,20 @@ func (a *App) View() string {
 }
 
 type infoModel struct {
+	infoType string
+
 	name string
 	description string
 	artistName string
 	trackName string
 	playlistName string
+
+	deviceName string
+	deviceId string
+	volumePercent int
+	isRestricted bool
+	isActive bool
+	deviceType string
 }
 
 func (i infoModel) Init() tea.Cmd {
@@ -184,5 +218,14 @@ func (i infoModel) View() string {
 	fmt.Fprintln(builder, "Artist:", i.artistName)
 	fmt.Fprintln(builder, "track:", i.trackName)
 
+	fmt.Fprintln(builder, "device:", i.deviceName)
+	fmt.Fprintln(builder, "deviceId:", i.deviceId)
+	fmt.Fprintln(builder, "volumnPercent:", i.volumePercent)
+	fmt.Fprintln(builder, "isActive:", i.isActive)
+
 	return builder.String()
+}
+
+type currentlyPlayingModel struct {
+	currentlyPlaying *types.CurrentlyPlayingTrack
 }

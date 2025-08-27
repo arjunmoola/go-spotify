@@ -22,7 +22,6 @@ func defaultKeymap() list.KeyMap {
 	}
 }
 
-
 type spotifyListItem interface {
 	String() string
 	FilterValue() string
@@ -74,6 +73,18 @@ func (p playlistItem) String() string {
 }
 
 func (p playlistItem) FilterValue() string {
+	return ""
+}
+
+type deviceItem struct {
+	device *types.Device
+}
+
+func (d deviceItem) String() string {
+	return d.device.Name
+}
+
+func (d deviceItem) FilterValue() string {
 	return ""
 }
 
@@ -179,6 +190,11 @@ func convertItems(t any) []list.Item {
 		items = make([]list.Item, 0, len(t.Items))
 		for _, item := range t.Items {
 			items = append(items, playlistItem{ playlist: item })
+		}
+	case *types.AvailableDevices:
+		items = make([]list.Item, 0, len(t.Devices))
+		for _, item := range t.Devices {
+			items = append(items, deviceItem{ device: item })
 		}
 	case nil:
 		items = []list.Item{}

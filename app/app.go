@@ -227,6 +227,7 @@ type App struct {
 	title string
 	artists spotifyList
 	tracks spotifyList
+	devices spotifyList
 	playlists spotifyList
 	podcasts spotifyList
 	width int
@@ -350,10 +351,16 @@ func New(clientId, clientSecret, redirectUri string) *App {
 	playlists.SetTitle("Playlists")
 	playlists.SetListDimensions(10, 20)
 
-	grid := grid.New(3, 1)
+	devices := newSpotifyListModel(nil)
+	devices.SetShowTitle(true)
+	devices.SetTitle("Devices")
+	devices.SetListDimensions(10, 20)
+
+	grid := grid.New(1, 4)
 	grid.SetModel(artists, 0, 0)
 	grid.SetModel(tracks, 0, 1)
 	grid.SetModel(playlists, 0, 2)
+	grid.SetModel(devices, 0, 3)
 	//grid.SetCellDimensions(20, 30)
 
 	return &App{
@@ -364,6 +371,7 @@ func New(clientId, clientSecret, redirectUri string) *App {
 		artists: artists,
 		tracks: tracks,
 		playlists: playlists,
+		devices: devices,
 		grid: grid,
 		styles: NewAppStyles(),
 	}
@@ -432,6 +440,16 @@ type GetUsersPlaylistsResult struct {
 type AuthorizationResponse struct {
 	response *client.SpotifyAuthorizationResponse
 }
+
+type GetAvailableDevicesResult struct {
+	result *types.AvailableDevices
+}
+
+type GetCurrentlyPlayingTrackResult struct {
+	result *types.CurrentlyPlayingTrack
+}
+
+type GetCurrentlyPlayingEpisodeResult struct {}
 
 type UpdateConfigResult struct {}
 
@@ -533,6 +551,48 @@ func GetUsersPlaylist(a *App) tea.Cmd {
 		}
 
 		return GetUsersPlaylistsResult{ result: playlists }
+	}
+}
+
+func GetAvailableDevices(a *App) tea.Cmd {
+	return func() tea.Msg {
+		if a.AccessToken() == "" {
+			return AppErr(fmt.Errorf("access token in empty in GetUsersPlaylist"))
+		}
+
+		accessToken := a.AccessToken()
+
+		devices, err := a.client.GetAvailableDevices(accessToken)
+
+		if err != nil {
+			return AppErr(err)
+		}
+
+		return GetAvailableDevicesResult{ result: devices }
+	}
+}
+
+func GetCurrentlyPlayingTrack(a *App) tea.Cmd {
+	return func() tea.Msg {
+		if a.AccessToken() == "" {
+			return AppErr(fmt.Errorf("access token in GetCurrentlyPlayingTrack"))
+		}
+
+		accesstoken := a.AccessToken()
+
+		currentlyPlayTrack, err := a.client.GetCurrentlyPlayingTrack(accesstoken)
+
+		if err != nil {
+			return AppErr(err)
+		}
+
+		switch track := currentlyPlayTrack.(type) {
+		case *types.CurrentlyPlayingTrack:
+			return GetCurrentlyPlayingTrackResult{ result: track }
+		default:
+			return AppErr(fmt.Errorf("invalid type"))
+		}
+		
 	}
 }
 
