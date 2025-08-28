@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/progress"
 	"fmt"
 	"time"
@@ -529,13 +530,26 @@ func New(clientId, clientSecret, redirectUri string) *App {
 	queue.SetTitle("Queue")
 	queue.SetListDimensions(10, 20)
 
+	sidebar := NewList(nil)
+	sidebar.SetListDimensions(10, 20)
+
+	items := []list.Item{
+		sidebarItem("Top Artists"),
+		sidebarItem("Top Tracks"),
+		sidebarItem("Playlists"),
+	}
+
+	sidebar.SetItems(items)
+
 	row := grid.NewRow(artists, tracks, playlists, playlistItems, devices, queue)
 	media := media.New("prev", "play", "next", "up", "down")
-	row2 := grid.NewRow(media)
+	row2 := grid.NewRow(sidebar)
+	row3 := grid.NewRow(media)
 
 	g := grid.New()
 	g.Append(row)
 	g.Append(row2)
+	g.Append(row3)
 	//g.SetModel(artists, 0, 0)
 	//g.SetModel(tracks, 0, 1)
 	//g.SetModel(playlists, 0, 2)
@@ -551,7 +565,8 @@ func New(clientId, clientSecret, redirectUri string) *App {
 	posMap["playlist_items"] = grid.Pos(0, 3)
 	posMap["devices"] = grid.Pos(0, 4)
 	posMap["queue"] = grid.Pos(0, 5)
-	posMap["media"] = grid.Pos(1, 0)
+	posMap["sidebar"] = grid.Pos(1, 0)
+	posMap["media"] = grid.Pos(2, 0)
 
 	typeMap := make(map[grid.Position]string)
 

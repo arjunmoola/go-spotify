@@ -200,10 +200,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			push(updateSkipNext(a))
 		case "b":
 			push(updateSkipPrev(a))
-			//if !a.CurrentlyPlayingIsValid() {
-			//	break
-			//}
-			//push(SkipSongCmd(a, "previous"), GetUsersQueueCmd(a))
 		case "a":
 			push(handleAddItem(a))
 		case "enter":
@@ -237,18 +233,18 @@ func updateMediaControlSelection(a *App, m media.Model, pos grid.Position) tea.C
 	switch button {
 	case "play":
 		m.SetItem("pause", m.Index())
-		cmd = m.PressButton()
-		//return tea.Batch(updatePlaybackStatus(a), m.PressButton())
+		//cmd = m.PressButton()
+		cmd = tea.Batch(updatePlaybackStatus(a), m.PressButton())
 	case "pause":
 		m.SetItem("play", m.Index())
-		cmd = m.PressButton()
-		//return tea.Batch(updatePlaybackStatus(a), m.PressButton())
+		//cmd = m.PressButton()
+		cmd = tea.Batch(updatePlaybackStatus(a), m.PressButton())
 	case "prev":
-		cmd = m.PressButton()
-		//return tea.Batch(updateSkipPrev(a), m.PressButton())
+		//cmd = m.PressButton()
+		cmd = tea.Batch(updateSkipPrev(a), m.PressButton())
 	case "next":
-		cmd = m.PressButton()
-		//return tea.Batch(updateSkipNext(a), m.PressButton())
+		//cmd = m.PressButton()
+		cmd = tea.Batch(updateSkipNext(a), m.PressButton())
 	case "up":
 	case "down":
 	}
@@ -361,33 +357,6 @@ func handlePlaylistSelection(a *App, item list.Item) tea.Cmd {
 	return GetPlaylistItemsCmd(a, playlistId)
 }
 
-func (a *App) viewCurrentlyPlaying() string {
-	playing, ok := a.CurrentlyPlaying()
-
-	if !ok {
-		return "unable to get currently playing information"
-	}
-
-	var s string
-
-	if playing.Item.Value.Type == "track" {
-		var percent float64
-		item := playing.Item.Value.Track
-		percent = float64(playing.ProgressMs.Value)/float64(item.DurationMs)
-		songName := a.styles.artistStyle.Render(item.Name)
-		isPlayingView := fmt.Sprintf("playing: %t", playing.IsPlaying)
-		s = lipgloss.JoinVertical(lipgloss.Left, songName, isPlayingView)
-		s = lipgloss.JoinHorizontal(lipgloss.Left, s, a.progress.ViewAs(percent))
-	} else {
-		item := playing.Item.Value.Episode
-		s += item.Name + " "
-		s += fmt.Sprintf("%d", item.DurationMs) + " "
-		s += fmt.Sprintf("%t", playing.IsPlaying)
-	}
-
-	return a.styles.currentlyPlaying.Width(a.width-5).Render(s)
-}
-
 func (a *App) viewActiveDevice() string {
 	device, valid := a.ActiveDevice()
 
@@ -403,57 +372,24 @@ func (a *App) viewActiveDevice() string {
 	return a.styles.currentlyPlaying.Width(20).Render(s)
 }
 
-func (a *App) viewPlaybackState() string {
-	if !a.PlaybackStateIsValid() {
-		return "unable to get playback state information"
-	}
-
-	state, _  := a.PlaybackState()
-
-	device, _ := a.PlaybackStateDevice()
-
-	var s string
-
-	s += fmt.Sprintf("device name: %s\n", device.Name)
-	s += fmt.Sprintf("device id: %s\n", device.Id.Value)
-	s += fmt.Sprintf("is playing: %t\n", state.IsPlaying)
-
-	return a.styles.currentlyPlaying.Width(20).Render(s)
-}
-
 func (a *App) View() string {
 	builder := &strings.Builder{}
 
 	titleView :=  a.styles.title.Render(a.title) 
-	//artistsView := a.styles.artist.Render(a.artists.View())
-	//trackView := a.styles.track.Render(a.tracks.View())
 
 	titleView = lipgloss.Place(a.width, 1, lipgloss.Center, lipgloss.Center, titleView)
-	//row1 := lipgloss.JoinHorizontal(lipgloss.Center, artistsView, trackView)
 
-	//fmt.Fprintln(builder, titleView)
-	//fmt.Fprintln(builder, row1)
-	//builder.WriteRune('\n')
 	builder.WriteString(titleView)
 	builder.WriteRune('\n')
-	//builder.WriteString(a.grid.View())
-	//builder.WriteRune('\n')
-	//builder.WriteString(a.info.View())
-	//builder.WriteRune('\n')
-	//builder.WriteString(strings.Join(a.msgs, "\n"))
-	//builder.WriteRune('\n')
 
 	msgsView := strings.Join(a.msgs, "\n")
 	gridView := a.grid.View()
 
-	currentlyPlayingView := a.viewCurrentlyPlaying()
 	activeDeviceView := a.viewActiveDevice()
-	stateView := a.viewPlaybackState()
-	row2 := lipgloss.JoinHorizontal(lipgloss.Left, activeDeviceView, stateView)
+	row2 := lipgloss.JoinHorizontal(lipgloss.Left, activeDeviceView)
 
 	s := lipgloss.JoinVertical(lipgloss.Left, gridView, row2)
 	s = lipgloss.JoinVertical(lipgloss.Center, s, msgsView)
-	s = lipgloss.JoinVertical(lipgloss.Left, s, currentlyPlayingView)
 
 	errView := ""
 
@@ -464,46 +400,6 @@ func (a *App) View() string {
 	s = lipgloss.JoinVertical(lipgloss.Center, s, errView)
 
 	builder.WriteString(s)
-
-	return builder.String()
-}
-
-type infoModel struct {
-	infoType string
-
-	name string
-	description string
-	artistName string
-	trackName string
-	playlistName string
-
-	deviceName string
-	deviceId string
-	volumePercent int
-	isRestricted bool
-	isActive bool
-	deviceType string
-}
-
-func (i infoModel) Init() tea.Cmd {
-	return nil
-}
-
-func (i infoModel) Update(msg tea.Msg) (infoModel, tea.Cmd) {
-	return i, nil
-}
-
-func (i infoModel) View() string {
-	builder := &strings.Builder{}
-	fmt.Fprintln(builder, "name: ", i.name)
-	fmt.Fprintln(builder, "description: ", i.description)
-	fmt.Fprintln(builder, "Artist:", i.artistName)
-	fmt.Fprintln(builder, "track:", i.trackName)
-
-	fmt.Fprintln(builder, "device:", i.deviceName)
-	fmt.Fprintln(builder, "deviceId:", i.deviceId)
-	fmt.Fprintln(builder, "volumnPercent:", i.volumePercent)
-	fmt.Fprintln(builder, "isActive:", i.isActive)
 
 	return builder.String()
 }

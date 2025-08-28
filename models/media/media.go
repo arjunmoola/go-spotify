@@ -54,7 +54,7 @@ func New(opts ...string) Model {
 		buttons: opts,
 		idx: 0,
 		progress: progress,
-		buttonPressDur: time.Millisecond*500,
+		buttonPressDur: time.Millisecond*250,
 		pressed: make(map[int]bool),
 		styles: defaultStyles(),
 	}
@@ -172,7 +172,7 @@ func (m Model) View() string {
 		volumeButtons = append(volumeButtons, renderButton(m, i, m.buttons[i]))
 	}
 
-	mediaButtonsView := lipgloss.JoinHorizontal(lipgloss.Center, mediaButtons...)
+	mediaButtonsView := lipgloss.JoinHorizontal(lipgloss.Left, mediaButtons...)
 	volumeButtonsView := lipgloss.JoinHorizontal(lipgloss.Right, volumeButtons...)
 
 	mediaButtonsView = m.styles.buttonGroup.Render(mediaButtonsView)
@@ -180,7 +180,7 @@ func (m Model) View() string {
 
 	mediaView := lipgloss.JoinVertical(lipgloss.Center, mediaButtonsView, m.progress.ViewAs(m.percent))
 
-	modelView := m.styles.modelStyle.Width(m.width-5).Height(8)
+	modelView := m.styles.modelStyle.Width(m.width-5).Height(3)
 	w := modelView.GetWidth()
 
 	mediaView = lipgloss.PlaceHorizontal(1-w/8, lipgloss.Left, mediaView)

@@ -22,6 +22,12 @@ func defaultKeymap() list.KeyMap {
 	}
 }
 
+type sidebarItem string
+
+func (s sidebarItem) FilterValue() string {
+	return ""
+}
+
 type itemDelegate struct{}
 
 func (i itemDelegate) Height() int { return 1 }
@@ -30,6 +36,8 @@ func (i itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 func (i itemDelegate) Render(w io.Writer, m list.Model, idx int, item list.Item) {
 	var s string
 	switch item := item.(type) {
+	case sidebarItem:
+		s = string(item)
 	case types.Artist:
 		s = item.Name
 	case types.Track:
