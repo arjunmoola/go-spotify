@@ -23,6 +23,7 @@ const defaultLimitRate = time.Millisecond*100
 var (
 	spotifyAuthorizationUrl = "https://accounts.spotify.com/authorize?"
 	spotifyWebApiUrl = "https://api.spotify.com/v1/me"
+	spotifyWebApiBaseUrl = "https://api.spotify.com/v1"
 )
 
 var defaultScopes = []string{
@@ -711,7 +712,7 @@ func (c *Client) GetQueue(accessToken string) (types.UsersQueue, error) {
 }
 
 func createPlaylistUrl(s ...string) (*url.URL, error) {
-	path, err := url.JoinPath(spotifyWebApiUrl, s...)
+	path, err := url.JoinPath(spotifyWebApiBaseUrl, s...)
 	
 	if err != nil {
 		return nil, err

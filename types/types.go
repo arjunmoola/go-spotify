@@ -53,10 +53,34 @@ func (i *ItemUnion) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (i ItemUnion) FilterValue() string {
+	return ""
+}
+
 func unmarshaler(b []byte) func(v any) error {
 	return func(v any) error {
 		return json.Unmarshal(b, v)
 	}
+}
+
+type PlaylistItemUnion struct {
+	AddedAt Optional[string] `json:"added_at"`
+	AddedBy Optional[User] `json:"user"`
+	IsLocal bool `json:"is_local"`
+	Track ItemUnion `json:"track"`
+}
+
+func (i PlaylistItemUnion) FilterValue() string {
+	return ""
+}
+
+type Page[T any] struct {
+	Href string `json:"href"`
+	Limit int `json:"limit"`
+	Next Optional[string] `json:"next"`
+	Previous Optional[string] `json:"previous"`
+	Total int `json:"total"`
+	Items []T `json:"items"`
 }
 
 type CurrentUsersPlaylistResponse struct {

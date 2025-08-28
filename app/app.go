@@ -268,6 +268,7 @@ type App struct {
 
 	grid grid.Model
 	posMap map[string]grid.Position
+	typeMap map[grid.Position]string
 
 	title string
 	artists List
@@ -533,12 +534,19 @@ func New(clientId, clientSecret, redirectUri string) *App {
 	posMap["devices"] = grid.Pos(0, 4)
 	posMap["queue"] = grid.Pos(0, 5)
 
+	typeMap := make(map[grid.Position]string)
+
+	for k, v := range posMap {
+		typeMap[v] = k
+	}
+
 	return &App{
 		authInfo: auth,
 		dbUrl: dburl,
 		configDir: dir,
 		title: "Go-Spotify",
 		posMap: posMap,
+		typeMap: typeMap,
 		artists: artists,
 		tracks: tracks,
 		playlists: playlists,

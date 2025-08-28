@@ -45,6 +45,13 @@ func (i itemDelegate) Render(w io.Writer, m list.Model, idx int, item list.Item)
 		case "episode":
 			s = item.Episode.Name
 		}
+	case types.PlaylistItemUnion:
+		switch item.Track.Type {
+		case "track":
+			s = item.Track.Track.Name
+		case "episode":
+			s = item.Track.Episode.Name
+		}
 	}
 
 	var f func(s ...string) string

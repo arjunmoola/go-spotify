@@ -63,6 +63,11 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m := a.grid.At(pos).(List)
 		b.Append(SetItems(&m, msg.result.Queue))
 		a.grid.SetModelPos(m, pos)
+	case GetPlaylistItemsResult:
+		pos := a.posMap["playlist_items"]
+		m := a.grid.At(pos).(List)
+		b.Append(SetItems(&m, msg.result.Items))
+		a.grid.SetModelPos(m, pos)
 	case GetCurrentlyPlayingTrackResult:
 		if msg.result != nil {
 			a.foundCurrentlyPlaying = true
@@ -161,32 +166,35 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			} else {
 				pos := a.grid.Cursor()
-				_, ok := a.grid.At(pos).(List)
+				m, ok := a.grid.At(pos).(List)
 				if !ok {
 					break
 				}
-				//selectedValue := m.list.SelectedItem()
-				//switch item := selectedValue.(type) {
-				//case artistItem:
-				//	a.info.artistName = item.artist.Name
-				//case trackItem:	
-				//	a.info.trackName = item.track.Name
-				//case playlistItem:
-				//	a.info.artistName = item.playlist.Name
-				//	a.info.description = item.playlist.Description
-				//case deviceItem:
-				//	device := ActiveDevice{
-				//		name: item.device.Name,
-				//		id: item.device.Id,
-				//		volumePercent: item.device.VolumePercent,
-				//		supportsVolume: item.device.SupportsVolumne,
-				//	}
-				//	a.SetActiveDevice(device)
-				//	a.info.deviceName = item.device.Name
-				//	a.info.deviceId = item.device.Id
-				//	a.info.deviceType = item.device.Type
-				//	a.info.isActive = item.device.IsActive
-				//}
+
+				listType := a.typeMap[pos]
+
+				if listType != "playlists" {
+					break
+				}
+
+				selectedItem := m.l.SelectedItem()
+
+				item, ok := selectedItem.(types.SimplifiedPlaylistObject)
+
+				if !ok {
+					break
+				}
+
+				playlistId := item.Id
+
+				if playlistId == "" {
+					a.msgs = append(a.msgs, "selected playlist id is empty")
+					break
+				}
+
+				a.msgs = append(a.msgs, "playlistId: " + playlistId)
+
+				b.Append(GetPlaylistItemsCmd(a, playlistId))
 			}
 		//case "r":
 		//	if a.CurrentlyPlayingIsValid() {
