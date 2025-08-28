@@ -901,6 +901,24 @@ func GetPlaylistItemsCmd(a *App, playlistId string) tea.Cmd {
 	}
 }
 
+func AddItemToQueueCmd(a *App, uri string) tea.Cmd {
+	return func() tea.Msg {
+		accessToken := a.AccessToken()
+		deviceId, valid := a.ActiveDeviceId()
+		if !valid {
+			return AppErr(fmt.Errorf("active device is not set up"))
+		}
+
+		err := a.client.AddItemToQueue(accessToken, uri, deviceId)
+
+		if err != nil {
+			return AppErr(err)
+		}
+
+		return nil
+	}
+}
+
 
 func (a *App) authorizeClient() error {
 	resp, err := a.client.Authorize()

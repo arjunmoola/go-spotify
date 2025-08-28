@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 	"go-spotify/types"
 )
@@ -165,45 +166,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					a.grid.SetFocus(true)
 				}
 			} else {
-				pos := a.grid.Cursor()
-				m, ok := a.grid.At(pos).(List)
-				if !ok {
-					break
-				}
-
-				listType := a.typeMap[pos]
-
-				if listType != "playlists" {
-					break
-				}
-
-				selectedItem := m.l.SelectedItem()
-
-				item, ok := selectedItem.(types.SimplifiedPlaylistObject)
-
-				if !ok {
-					break
-				}
-
-				playlistId := item.Id
-
-				if playlistId == "" {
-					a.msgs = append(a.msgs, "selected playlist id is empty")
-					break
-				}
-
-				a.msgs = append(a.msgs, "playlistId: " + playlistId)
-
-				b.Append(GetPlaylistItemsCmd(a, playlistId))
+				b.Append(handleSelection(a))
 			}
-		//case "r":
-		//	if a.CurrentlyPlayingIsValid() {
-		//		break
-		//	}
-
-		//	if !a.retrying {
-		//		b.Append(GetCurrentlyPlaying(a))
-		//	}
 		}
 	}
 
@@ -211,6 +175,46 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	b.Append(cmd)
 
 	return a, b.Cmd()
+}
+
+func handleSelection(a *App) tea.Cmd {
+	pos := a.grid.Cursor()
+	m, ok := a.grid.At(pos).(List)
+	if !ok {
+		return nil
+	}
+
+	selectedItem := m.l.SelectedItem()
+
+	switch a.typeMap[pos] {
+	case "playlists":
+		return handlePlaylistSelection(a, selectedItem)
+	case "playlist_items":
+	case "tracks":
+	default:
+		return nil
+	}
+
+	return nil
+}
+
+func handlePlaylistSelection(a *App, item list.Item) tea.Cmd {
+	selectedItem, ok := item.(types.SimplifiedPlaylistObject)
+
+	if !ok {
+		return nil
+	}
+
+	playlistId := selectedItem.Id
+
+	if playlistId == "" {
+		a.msgs = append(a.msgs, "playlist id is empty")
+		return nil
+	}
+
+	a.msgs = append(a.msgs, "playlistId: " + playlistId)
+
+	return GetPlaylistItemsCmd(a, playlistId)
 }
 
 func (a *App) viewCurrentlyPlaying() string {

@@ -755,6 +755,27 @@ func (c *Client) GetPlaylistItems(accessToken string, playlistId string) (types.
 	return page, nil
 }
 
+func (c *Client) AddItemToQueue(accessToken string, uri string, deviceId string) error {
+	u, err := createPlaybackUrl("queue")
+
+	if err != nil {
+		return err
+	}
+
+	values := make(url.Values)
+	setUri(values, uri)
+	setDeviceId(values, deviceId)
+	encodeUrl(u, values)
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+
+	if err != nil {
+		return err
+	}
+
+	return fetchResponse(c, req, nil)
+}
+
 
 func setDeviceId(values url.Values, deviceId string) {
 	values.Set("device_id", deviceId)
@@ -762,6 +783,10 @@ func setDeviceId(values url.Values, deviceId string) {
 
 func setMarket(values url.Values, country string) {
 	values.Set("market", country)
+}
+
+func setUri(values url.Values, uri string) {
+	values.Set("uri", uri)
 }
 
 
