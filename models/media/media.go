@@ -14,16 +14,22 @@ type Styles struct {
 	artistStyle lipgloss.Style
 	selectedItem lipgloss.Style
 	buttonPressedStyle lipgloss.Style
+	modelStyle lipgloss.Style
+	buttonGroup lipgloss.Style
 }
 
 func defaultStyles() Styles {
-	buttonStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Height(2)
+	buttonStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Height(1)
+	modelStyle := lipgloss.NewStyle().BorderStyle(lipgloss.HiddenBorder()).Align(lipgloss.Center)
+	buttonGroup := lipgloss.NewStyle().Margin(1)
 	return Styles{
 		buttonStyle: buttonStyle,
 		//progressStyle: lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder(),
 		artistStyle: lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()),
 		selectedItem: buttonStyle.Foreground(lipgloss.Color("200")),
 		buttonPressedStyle: buttonStyle.Background(lipgloss.Color("200")),
+		modelStyle: modelStyle,
+		buttonGroup: buttonGroup,
 	}
 }
 
@@ -58,6 +64,7 @@ type clearPress struct{ idx int}
 
 func (m *Model) SetWidth(w int) {
 	m.width = w
+	m.progress.Width = w*7/10
 }
 
 func (m *Model) PressButton() tea.Cmd {
@@ -136,25 +143,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func renderButton(m Model, i int, button string) string {
+	var buttonView string
+	if i == m.idx {
+		buttonView = m.styles.selectedItem.Render(button)
+	} else {
+		buttonView = m.styles.buttonStyle.Render(button)
+	}
+
+	if m.pressed[i] {
+		buttonView = m.styles.buttonPressedStyle.Render(button)
+	}
+
+	return buttonView
+}
+
 func (m Model) View() string {
 	artistView := m.styles.artistStyle.Render(m.artist)
 
-	buttons := make([]string, 0, len(m.buttons))
+	mediaButtons := make([]string, 0, 3)
+	volumeButtons := make([]string, 0, 2)
 
-	for i, button := range m.buttons {
-		var buttonView string
-		if i == m.idx {
-			buttonView = m.styles.selectedItem.Render(button)
-		} else if m.pressed[i] {
-			buttonView = m.styles.buttonPressedStyle.Render(button)
-		} else {
-			buttonView = m.styles.buttonStyle.Render(button)
-		}
-		buttons = append(buttons, buttonView)
+	for i := range 3 {
+		mediaButtons = append(mediaButtons, renderButton(m, i, m.buttons[i]))
 	}
-	buttonsView := lipgloss.JoinHorizontal(lipgloss.Center, buttons...)
-	s := lipgloss.JoinVertical(lipgloss.Left, buttonsView, m.progress.ViewAs(m.percent))
-	s = lipgloss.JoinHorizontal(lipgloss.Left, artistView, s)
 
-	return lipgloss.NewStyle().BorderStyle(lipgloss.HiddenBorder()).Width(m.width-5).Render(s)
+	for i := 3; i < len(m.buttons); i++ {
+		volumeButtons = append(volumeButtons, renderButton(m, i, m.buttons[i]))
+	}
+
+	mediaButtonsView := lipgloss.JoinHorizontal(lipgloss.Center, mediaButtons...)
+	volumeButtonsView := lipgloss.JoinHorizontal(lipgloss.Right, volumeButtons...)
+
+	mediaButtonsView = m.styles.buttonGroup.Render(mediaButtonsView)
+	volumeButtonsView = m.styles.buttonGroup.Render(volumeButtonsView)
+
+	mediaView := lipgloss.JoinVertical(lipgloss.Center, mediaButtonsView, m.progress.ViewAs(m.percent))
+
+	modelView := m.styles.modelStyle.Width(m.width-5).Height(8)
+	w := modelView.GetWidth()
+
+	mediaView = lipgloss.PlaceHorizontal(1-w/8, lipgloss.Left, mediaView)
+	artistView = lipgloss.PlaceHorizontal(1-w/2, lipgloss.Center, artistView)
+	volumeButtonsView = lipgloss.PlaceHorizontal(1-w/8, lipgloss.Left, volumeButtonsView)
+
+	s := lipgloss.JoinHorizontal(lipgloss.Left, artistView, mediaView, volumeButtonsView)
+
+	return modelView.Render(s)
 }
