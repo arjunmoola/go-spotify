@@ -576,15 +576,15 @@ func (c *Client) GetCurrentlyPlaying(accessToken string) (types.CurrentlyPlaying
 		return item, err
 	}
 
-	values := make(url.Values)
-	values.Set("market", "US")
-
 	u, err := url.Parse(path)
 
 	if err != nil {
 		return item, err
 	}
-	u.RawQuery = values.Encode()
+
+	values := make(url.Values)
+	setMarket(values, "US")
+	encodeUrl(u, values)
 
 	req, err := http.NewRequest("GET", u.String(), nil)
 
@@ -594,12 +594,11 @@ func (c *Client) GetCurrentlyPlaying(accessToken string) (types.CurrentlyPlaying
 
 	setAuthorizationHeader(req, accessToken)
 
-	if err := c.fetchResponse(req, &item); err != nil {
+	if err := fetchResponse(c, req, &item); err != nil {
 		return item, err
 	}
 
 	return item, nil
-
 }
 
 type StartResumePayload struct {
@@ -610,23 +609,15 @@ type StartResumePayload struct {
 }
 
 func (c *Client) StartResumePlayback(accessTokens string, deviceId string) error {
-	path, err := url.JoinPath(spotifyWebApiUrl, "player", "play")
+	u, err := createPlaybackUrl("play")
 
 	if err != nil {
 		return err
 	}
 
 	values := make(url.Values)
-
-	values.Set("device_id", deviceId)
-
-	u, err := url.Parse(path)
-
-	if err != nil {
-		return err
-	}
-
-	u.RawQuery = values.Encode()
+	setDeviceId(values, deviceId)
+	encodeUrl(u, values)
 
 	payload := StartResumePayload{
 		PositionMs: 0,
@@ -648,27 +639,19 @@ func (c *Client) StartResumePlayback(accessTokens string, deviceId string) error
 
 	setAuthorizationHeader(req, accessTokens)
 
-	return c.fetchResponse(req, nil)
+	return fetchResponse(c, req, nil)
 }
 
 func (c *Client) PausePlayback(accessTokens string, deviceId string) error {
-	path, err := url.JoinPath(spotifyWebApiUrl, "player", "pause")
+	u, err := createPlaybackUrl("pause")
 
 	if err != nil {
 		return err
 	}
 
 	values := make(url.Values)
-
-	values.Set("device_id", deviceId)
-
-	u, err := url.Parse(path)
-
-	if err != nil {
-		return err
-	}
-
-	u.RawQuery = values.Encode()
+	setDeviceId(values, deviceId)
+	encodeUrl(u, values)
 
 	req, err := http.NewRequest("PUT", u.String(), nil)
 
@@ -678,7 +661,127 @@ func (c *Client) PausePlayback(accessTokens string, deviceId string) error {
 
 	setAuthorizationHeader(req, accessTokens)
 
-	return c.fetchResponse(req, nil)
+	return fetchResponse(c, req, nil)
+}
+
+func (c *Client) SkipSong(accessToken string , deviceId string, direction string) error {
+	u, err := createPlaybackUrl(direction)
+
+	if err != nil {
+		return err
+	}
+
+	values := make(url.Values)
+	setDeviceId(values, deviceId)
+	encodeUrl(u, values)
+
+	req, err := http.NewRequest("POST", u.String(), nil)
+
+	if err != nil {
+		return err
+	}
+
+	setAuthorizationHeader(req, accessToken)
+
+	return fetchResponse(c, req, nil)
+}
+
+func (c *Client) GetQueue(accessToken string) (types.UsersQueue, error) {
+	var queue types.UsersQueue
+
+	u, err := createPlaybackUrl("queue")
+
+	if err != nil {
+		return queue, err
+	}
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+
+	if err != nil {
+		return queue, err
+	}
+
+	setAuthorizationHeader(req, accessToken)
+
+	if err := fetchResponse(c, req, &queue); err != nil {
+		return queue, err
+	}
+
+	return queue, nil
+}
+
+func createPlaylistUrl(s ...string) (*url.URL, error) {
+	path, err := url.JoinPath(spotifyWebApiUrl, s...)
+	
+	if err != nil {
+		return nil, err
+	}
+
+	u, err := url.Parse(path)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return u, nil
+}
+
+func (c *Client) GetPlaylistItems(accessToken string, playlistId string) (types.Page[types.PlaylistItemUnion], error) {
+	var page types.Page[types.PlaylistItemUnion]
+
+	u, err := createPlaylistUrl("playlists", playlistId, "tracks")
+
+	if err != nil {
+		return page, err
+	}
+
+	values := make(url.Values)
+	setMarket(values, "US")
+	encodeUrl(u, values)
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+
+	if err != nil {
+		return page, err
+	}
+
+	setAuthorizationHeader(req, accessToken)
+
+	if err := fetchResponse(c, req, &page); err != nil {
+		return page, err
+	}
+
+	return page, nil
+}
+
+
+func setDeviceId(values url.Values, deviceId string) {
+	values.Set("device_id", deviceId)
+}
+
+func setMarket(values url.Values, country string) {
+	values.Set("market", country)
+}
+
+
+func createPlaybackUrl(endpoint string) (*url.URL, error) {
+	path, err := url.JoinPath(spotifyWebApiUrl, "player", endpoint)
+	
+	if err != nil {
+		return nil, err
+	}
+
+	u, err := url.Parse(path)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return u, nil
+}
+
+func encodeUrl(u *url.URL, values url.Values) {
+	u.RawQuery = values.Encode()
 }
 
 func (c *Client) GetCurrentlyPlayingTrack(accessToken string) (any, error) {
@@ -741,6 +844,22 @@ func (c *Client) GetCurrentlyPlayingTrack(accessToken string) (any, error) {
 	} else {
 		return nil, fmt.Errorf("invalid type")
 	}
+}
+
+func fetchResponse(c *Client, req *http.Request, v any) error {
+	resp, err := c.client.Do(req)
+
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	if v == nil {
+		return checkResponseCode(resp)
+	}
+
+	return handleResponse(resp, v)
 }
 
 func (c *Client) fetchResponse(req *http.Request, v any) error {

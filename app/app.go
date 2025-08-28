@@ -283,6 +283,7 @@ type App struct {
 	retrying bool
 	currentlyPlayingRetryCount int
 
+	playbackState Optional[types.PlaybackState]
 	activeDevice Optional[types.Device]
 	currentlyPlaying Optional[types.CurrentlyPlaying]
 	info SpotifyInfo
@@ -291,6 +292,35 @@ type App struct {
 type Optional[T any] struct {
 	Value T
 	Valid bool
+}
+
+func (a *App) SetPlaybackState(p types.PlaybackState) {
+	a.playbackState = Optional[types.PlaybackState] {
+		Valid: true,
+		Value: p,
+	}
+}
+
+func (a *App) PlaybackState() (state types.PlaybackState, valid bool) {
+	if !a.PlaybackStateIsValid() {
+		return
+	}
+
+	return a.playbackState.Value, true
+}
+
+func (a *App) PlaybackStateIsValid() bool {
+	return a.playbackState.Valid
+}
+
+func (a *App) PlaybackStateDevice() (device types.Device, valid bool) {
+	if !a.playbackState.Valid {
+		return
+	}
+
+	device = a.playbackState.Value.Device
+
+	return device ,true
 }
 
 func (a *App) SetCurrentlyPlaying(c types.CurrentlyPlaying) {
@@ -468,24 +498,40 @@ func New(clientId, clientSecret, redirectUri string) *App {
 	playlists.SetTitle("Playlists")
 	playlists.SetListDimensions(10, 20)
 
+	playlistItems := NewList(nil)
+	playlistItems.SetShowTitle(true)
+	playlistItems.SetTitle("Items")
+	playlistItems.SetListDimensions(10, 20)
+
 	devices := NewList(nil)
 	devices.SetShowTitle(true)
 	devices.SetTitle("Devices")
 	devices.SetListDimensions(10, 20)
 
+	queue := NewList(nil)
+	queue.SetShowTitle(true)
+	queue.SetTitle("Queue")
+	queue.SetListDimensions(10, 20)
 
-	g := grid.New(1, 4)
-	g.SetModel(artists, 0, 0)
-	g.SetModel(tracks, 0, 1)
-	g.SetModel(playlists, 0, 2)
-	g.SetModel(devices, 0, 3)
+	row := grid.NewRow(artists, tracks, playlists, playlistItems, devices, queue)
+
+	g := grid.New()
+	g.Append(row)
+	//g.SetModel(artists, 0, 0)
+	//g.SetModel(tracks, 0, 1)
+	//g.SetModel(playlists, 0, 2)
+	//g.SetModel(playlistItems, 0, 3)
+	//g.SetModel(devices, 0, 4)
+	//g.SetModel(queue, 0, 5)
 	//grid.SetCellDimensions(20, 30)
 
 	posMap := make(map[string]grid.Position)
 	posMap["artists"] = grid.Pos(0, 0)
 	posMap["tracks"] = grid.Pos(0, 1)
 	posMap["playlists"] = grid.Pos(0, 2)
-	posMap["devices"] = grid.Pos(0, 3)
+	posMap["playlist_items"] = grid.Pos(0, 3)
+	posMap["devices"] = grid.Pos(0, 4)
+	posMap["queue"] = grid.Pos(0, 5)
 
 	return &App{
 		authInfo: auth,
@@ -580,6 +626,14 @@ type GetCurrentlyPlayingResult struct {
 	retry bool
 }
 
+type GetUsersQueueResult struct {
+	result types.UsersQueue
+}
+
+type GetPlaylistItemsResult struct {
+	result types.Page[types.PlaylistItemUnion]
+}
+
 type GetCurrentlyPlayingEpisodeResult struct {}
 
 type UpdateConfigResult struct {}
@@ -611,17 +665,22 @@ func UpdateConfig(a *App, auth AuthorizationInfo) tea.Cmd {
 
 }
 
-func RenewRefreshToken(a *App, auth AuthorizationInfo) tea.Cmd {
-	return func() tea.Msg {
-		resp, err := a.client.RefreshToken(auth.accessToken, auth.refreshToken, auth.clientId)
+func RenewRefreshTokenTick(a *App, auth AuthorizationInfo) tea.Cmd {
+	d := time.Until(auth.expiresAt).Seconds()
+	return tea.Tick(time.Duration(d)*time.Second, func(_ time.Time) tea.Msg {
+		return renewRefreshToken(a, auth)
+	})
+}
 
-		if err != nil {
-			return AppErr(err)
-		}
+func renewRefreshToken(a *App, auth AuthorizationInfo) tea.Msg {
+	resp, err := a.client.RefreshToken(auth.accessToken, auth.refreshToken, auth.clientId)
 
-		return RenewRefreshTokenResult {
-			result: resp,
-		}
+	if err != nil {
+		return AppErr(err)
+	}
+
+	return RenewRefreshTokenResult {
+		result: resp,
 	}
 }
 
@@ -784,6 +843,56 @@ func PausePlaybackCmd(a *App) tea.Cmd {
 		return nil
 	}
 }
+
+func SkipSongCmd(a *App, action string) tea.Cmd {
+	return func() tea.Msg {
+		accessToken := a.AccessToken()
+
+		deviceId, valid := a.ActiveDeviceId()
+
+		if !valid {
+			return AppErr(fmt.Errorf("active device is either not set or active device id is not set"))
+		}
+
+		if err := a.client.SkipSong(accessToken, deviceId, action); err != nil{
+			return AppErr(err)
+		}
+
+		return nil
+	}
+}
+
+func GetUsersQueueCmd(a *App) tea.Cmd {
+	return func() tea.Msg {
+		accessToken := a.AccessToken()
+
+		queue, err := a.client.GetQueue(accessToken)
+
+		if err != nil {
+			return AppErr(err)
+		}
+
+		return GetUsersQueueResult{
+			result: queue,
+		}
+	}
+}
+
+func GetPlaylistItemsCmd(a *App, playlistId string) tea.Cmd {
+	return func() tea.Msg {
+		accessToken := a.AccessToken()
+		items, err := a.client.GetPlaylistItems(accessToken, playlistId)
+
+		if err != nil {
+			return AppErr(err)
+		}
+
+		return GetPlaylistItemsResult {
+			result: items,
+		}
+	}
+}
+
 
 func (a *App) authorizeClient() error {
 	resp, err := a.client.Authorize()

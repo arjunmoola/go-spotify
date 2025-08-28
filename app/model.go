@@ -11,8 +11,8 @@ import (
 
 type Batch []tea.Cmd
 
-func (b *Batch) Append(cmd tea.Cmd) {
-	*b = append(*b, cmd)
+func (b *Batch) Append(cmds... tea.Cmd) {
+	*b = append(*b, cmds...)
 }
 
 func (b Batch) Cmd() tea.Cmd {
@@ -27,6 +27,8 @@ func (a *App) Init() tea.Cmd {
 	b.Append(GetUsersPlaylist(a))
 	b.Append(GetAvailableDevices(a))
 	b.Append(GetCurrentlyPlayingCmd(a))
+	b.Append(RenewRefreshTokenTick(a, a.GetAuthorizationInfo()))
+	b.Append(GetUsersQueueCmd(a))
 	return b.Cmd()
 }
 
@@ -55,6 +57,11 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pos := a.posMap["playlists"]
 		m := a.grid.At(pos).(List)
 		b.Append(SetItems(&m, msg.result.Items))
+		a.grid.SetModelPos(m, pos)
+	case GetUsersQueueResult:
+		pos := a.posMap["queue"]
+		m := a.grid.At(pos).(List)
+		b.Append(SetItems(&m, msg.result.Queue))
 		a.grid.SetModelPos(m, pos)
 	case GetCurrentlyPlayingTrackResult:
 		if msg.result != nil {
@@ -92,6 +99,7 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		b.Append(UpdateConfig(a, a.GetAuthorizationInfo()))
+		b.Append(RenewRefreshTokenTick(a, a.GetAuthorizationInfo()))
 	case Shutdown:
 		a.db.Close()
 		return a, tea.Quit
@@ -130,13 +138,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !valid  {
 				break
 			}
-
 			if isPlaying {
 				b.Append(PausePlaybackCmd(a))
 			} else {
 				b.Append(StartResumePlaybackCmd(a))
 			}
-
+		case "n":
+			if !a.CurrentlyPlayingIsValid() {
+				break
+			}
+			b.Append(SkipSongCmd(a, "next"), GetUsersQueueCmd(a))
+		case "b":
+			if !a.CurrentlyPlayingIsValid() {
+				break
+			}
+			b.Append(SkipSongCmd(a, "previous"), GetUsersQueueCmd(a))
 		case "enter":
 			if !a.grid.Focus() {
 				pos := a.grid.Cursor()
@@ -230,6 +246,24 @@ func (a *App) viewActiveDevice() string {
 	return a.styles.currentlyPlaying.Width(20).Render(s)
 }
 
+func (a *App) viewPlaybackState() string {
+	if !a.PlaybackStateIsValid() {
+		return "unable to get playback state information"
+	}
+
+	state, _  := a.PlaybackState()
+
+	device, _ := a.PlaybackStateDevice()
+
+	var s string
+
+	s += fmt.Sprintf("device name: %s\n", device.Name)
+	s += fmt.Sprintf("device id: %s\n", device.Id.Value)
+	s += fmt.Sprintf("is playing: %t\n", state.IsPlaying)
+
+	return a.styles.currentlyPlaying.Width(20).Render(s)
+}
+
 func (a *App) View() string {
 	builder := &strings.Builder{}
 
@@ -253,10 +287,14 @@ func (a *App) View() string {
 	//builder.WriteRune('\n')
 
 	msgsView := strings.Join(a.msgs, "\n")
+	gridView := a.grid.View()
 
-	s := lipgloss.JoinHorizontal(lipgloss.Left, a.grid.View(), "hello")
-	s = lipgloss.JoinVertical(lipgloss.Left, s, a.viewCurrentlyPlaying())
-	s = lipgloss.JoinVertical(lipgloss.Left, s, a.viewActiveDevice())
+	currentlyPlayingView := a.viewCurrentlyPlaying()
+	activeDeviceView := a.viewActiveDevice()
+	stateView := a.viewPlaybackState()
+	row2 := lipgloss.JoinHorizontal(lipgloss.Left, currentlyPlayingView, activeDeviceView, stateView)
+
+	s := lipgloss.JoinVertical(lipgloss.Left, gridView, row2)
 	s = lipgloss.JoinVertical(lipgloss.Center, s, msgsView)
 
 	errView := ""
@@ -268,9 +306,6 @@ func (a *App) View() string {
 	s = lipgloss.JoinVertical(lipgloss.Center, s, errView)
 
 	builder.WriteString(s)
-
-	
-	//fmt.Fprintln(builder, "press ctrl+c to quit")
 
 	return builder.String()
 }

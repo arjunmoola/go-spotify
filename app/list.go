@@ -38,6 +38,13 @@ func (i itemDelegate) Render(w io.Writer, m list.Model, idx int, item list.Item)
 		s = item.Name
 	case types.Device:
 		s = item.Name
+	case types.ItemUnion:
+		switch item.Type {
+		case "track":
+			s = item.Track.Name
+		case "episode":
+			s = item.Episode.Name
+		}
 	}
 
 	var f func(s ...string) string
@@ -68,6 +75,11 @@ func defaultList(items []list.Item) list.Model {
 type List struct {
 	l list.Model
 	focus bool
+}
+
+type Queue struct {
+	l List
+	currentlyPlaying string
 }
 
 func NewList(items []list.Item) List {

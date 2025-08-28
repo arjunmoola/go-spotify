@@ -2,6 +2,8 @@ package grid
 import (
 	"strings"
 	"github.com/charmbracelet/lipgloss"
+	"slices"
+	"iter"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -44,21 +46,18 @@ type Model struct {
 	cols int
 	cellWidth int
 	cellHeight int
-	models []tea.Model
+	models []Row
 	cursor int
+	pos Position
 	focus bool
 	Styles Styles
 }
 
-func New(rows, cols int) Model {
-	models := make([]tea.Model, rows*cols)
+func New() Model {
 	return Model{
-		rows: rows,
-		cols: cols,
 		cellWidth: 10,
 		cellHeight: 10,
 		cursor: 0,
-		models: models,
 		Styles: DefaultStyle(),
 	}
 }
@@ -90,23 +89,44 @@ func (m *Model) SetCurrentCellStyle(style lipgloss.Style) {
 func (m *Model) SetCellDimensions(width, height int) {
 	m.cellWidth = width
 	m.cellHeight = height
-	//m.Styles.Cell = m.Styles.Cell.Width(width).Height(height)
-	//m.Styles.CurrentCell = m.Styles.CurrentCell.Width(width).Height(height)
 }
 
 func (m *Model) SetModel(model tea.Model, i, j int) {
-	m.models[i*m.cols+j] = model
+	m.models[i][j] = model
+}
+
+type Row []tea.Model
+
+func (r *Row) Append(model tea.Model) {
+	*r = append(*r, model)
+}
+
+func (r Row) Len() int {
+	return len(r)
+}
+
+func NewRow(models ...tea.Model) Row {
+	return Row(models)
+}
+
+func (m *Model) AppendRow(model tea.Model, rowIdx int) Position {
+	m.models[rowIdx] = append(m.models[rowIdx], model)
+	colIdx := len(m.models[rowIdx])
+	return Position{ rowIdx, colIdx-1 }
+}
+
+func (m *Model) Append(row Row) int {
+	m.models = append(m.models, row)
+	return len(m.models)-1
 }
 
 func (m *Model) SetModelPos(model tea.Model, pos Position) {
 	i, j := pos.Row, pos.Col
-	m.models[i*m.cols+j] = model
+	m.models[i][j] = model
 }
 
 func (m Model) At(pos Position) tea.Model {
-	i := pos.Row
-	j := pos.Col
-	return m.models[i*m.cols+j]
+	return m.models[pos.Row][pos.Col]
 }
 
 type direction int 
@@ -127,41 +147,43 @@ func Pos(i, j int) Position {
 }
 
 func (m *Model) updateCursor(dir string) {
-	cursor := m.cursor
-	i := cursor/m.cols
-	j := cursor%m.cols
+	pos := m.pos
+	//newPos := pos
+
+	i := pos.Row
+	j := pos.Col
 	newI := i
 	newJ := j
 
 	switch dir {
 	case "k":
 		newI--
+		//newPos.Row--
 	case "j":
 		newI++
+		//newPos.Row++
 	case "h":
 		newJ--
+		//newPos.Col--
 	case "l":
 		newJ++
+		//newPos.Col++
 	}
 
-	if newI < 0 || newI >= m.rows {
+	if newI < 0 || newI >= len(m.models) {
 		newI = i
 	}
 
-	if newJ < 0 || newJ >= m.cols {
+	if newJ < 0 || newJ >= len(m.models[newI]) {
 		newJ = j
 	}
 
-	m.cursor = newI*m.cols + newJ
-
+	m.pos = Position{ newI, newJ }
 }
 
 func (m Model) Cursor() Position {
-	i := m.cursor/m.cols
-	j := m.cursor%m.cols
-	return Position{ i, j }
+	return m.pos
 }
-
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -177,35 +199,50 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	if m.focus {
-		m.models[m.cursor], cmd = m.models[m.cursor].Update(msg)
+		pos := m.Cursor()
+		m.models[pos.Row][pos.Col], cmd = m.models[pos.Row][pos.Col].Update(msg)
 	}
 
 	return m, cmd
 }
 
-func (m Model) View() string {
-	builder := &strings.Builder{}
-	rows := make([]string, 0, m.rows)
-	for i := range m.rows {
-		modelViews := make([]string, 0, m.cols)
-		row := m.models[i:i+m.cols]
+func (m Model) viewRow(i int) string {
+	//builder := &strings.Builder{}
+	row := m.models[i]
+	selectedI, selectedJ := m.pos.Row, m.pos.Col
+	views := make([]string, 0, len(row))
 
-		for j, model := range row {
-			if i*m.cols+j == m.cursor {
-				if m.focus {
-					modelViews = append(modelViews, m.Styles.Focus.Render(model.View()))
-				} else {
-					modelViews = append(modelViews, m.Styles.CurrentCell.Render(model.View()))
-				}
+	for colIdx, model := range row {
+		if i == selectedI && colIdx == selectedJ {
+			if m.focus {
+				//s = lipgloss.JoinHorizontal(lipgloss.Left, s, m.Styles.Focus.Render(model.View()))
+				views = append(views, m.Styles.Focus.Render(model.View()))
 			} else {
-				modelViews = append(modelViews, m.Styles.Cell.Render(model.View()))
+				//s = lipgloss.JoinHorizontal(lipgloss.Left, s, m.Styles.CurrentCell.Render(model.View()))
+				views = append(views, m.Styles.CurrentCell.Render(model.View()))
 			}
+		} else {
+			views = append(views, m.Styles.Cell.Render(model.View()))
 		}
-		s := lipgloss.JoinHorizontal(lipgloss.Center, modelViews...)
-		rows = append(rows, s)
 	}
 
-	builder.WriteString(lipgloss.JoinVertical(lipgloss.Left, rows...))
+	return lipgloss.JoinHorizontal(lipgloss.Left, views...)
+}
 
+func (m Model) renderedRows() iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for i := range m.models {
+			s := m.viewRow(i)
+			if !yield(s) {
+				return
+			}
+		}
+	}
+}
+
+func (m Model) View() string {
+	builder := &strings.Builder{}
+	rows := slices.Collect(m.renderedRows())
+	builder.WriteString(lipgloss.JoinVertical(lipgloss.Left, rows...))
 	return builder.String()
 }
