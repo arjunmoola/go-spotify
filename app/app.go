@@ -189,24 +189,70 @@ type AppStyles struct {
 	track lipgloss.Style
 	currentModel lipgloss.Style
 	focusedModel lipgloss.Style
+	currentlyPlaying lipgloss.Style
 }
 
 func NewAppStyles() AppStyles {
 	defaultStyle := lipgloss.NewStyle()
 	generalModelStyle := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder())
+	currentlyPlaying := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder())
 
 	return AppStyles{
 		title: defaultStyle.Foreground(lipgloss.Color("200")),
 		artist: generalModelStyle,
 		track: generalModelStyle,
 		focusedModel: generalModelStyle.BorderForeground(lipgloss.Color("200")),
+		currentlyPlaying: currentlyPlaying,
 	}
+}
+
+type ActiveDevice struct {
+	name string
+	id string
+	deviceType string
+	volumePercent int
+	supportsVolume bool
+}
+
+type SpotifyInfo interface {
+	Type() string
+	Render() string
+}
+
+type ArtistInfo struct {
+	name string
+	popularity int
+	id string
+}
+
+func (a ArtistInfo) Type() string {
+	return "artist"
+}
+
+func (a ArtistInfo) Render() string {
+	return ""
+}
+
+type TrackInfo struct {
+	name string
+	id string
+	popularity int
+	trackNumber int
+	durationMs int
+	isPlayable bool
+	trackType string
+}
+
+type UserInfo struct {
+	user types.User
+	topTracks []types.Track
+	topArtists []types.Artist
 }
 
 type App struct {
 	client *client.Client
 	authInfo AuthorizationInfo
-	user User
+	user UserInfo
 
 	tokenExpired bool
 
@@ -219,47 +265,118 @@ type App struct {
 
 	err []error
 	state AppState
-	artistsModel spotifyListItem
-	playlistsModel spotifyListItem
 
 	grid grid.Model
-	info infoModel
+	posMap map[string]grid.Position
+
 	title string
-	artists spotifyList
-	tracks spotifyList
-	devices spotifyList
-	playlists spotifyList
-	podcasts spotifyList
+	artists List
+	tracks List
+	devices List
+	playlists List
 	width int
 	height int
-
+	foundCurrentlyPlaying bool
 	msgs []string
-
 	styles AppStyles
+
+	retrying bool
+	currentlyPlayingRetryCount int
+
+	activeDevice Optional[types.Device]
+	currentlyPlaying Optional[types.CurrentlyPlaying]
+	info SpotifyInfo
 }
 
-func (a *App) Profile() *types.UserProfile {
-	return a.user.profile
+type Optional[T any] struct {
+	Value T
+	Valid bool
 }
 
-func (a *App) TopTracks() *types.UsersTopTracks {
-	return a.user.topTracks
+func (a *App) SetCurrentlyPlaying(c types.CurrentlyPlaying) {
+	a.currentlyPlaying = Optional[types.CurrentlyPlaying] {
+		Valid: true,
+		Value: c,
+	}
 }
 
-func (a *App) TopArtists() *types.UsersTopArtists {
-	return a.user.topArtists
+func (a *App) CurrentlyPlaying() (types.CurrentlyPlaying, bool) {
+	return a.currentlyPlaying.Value, a.currentlyPlaying.Valid
 }
 
-func (a *App) SetProfile(profile *types.UserProfile) {
-	a.user.profile = profile
+func (a *App) CurrentlyPlayingIsValid() bool {
+	return a.currentlyPlaying.Valid
 }
 
-func (a *App) SetTopTracks(tracks *types.UsersTopTracks) {
+func (a *App) CurrentlyPlayingItem() types.ItemUnion {
+	return a.currentlyPlaying.Value.Item.Value
+}
+
+func (a *App) IsPlaying() (isPlaying bool, valid bool) {
+	if !a.currentlyPlaying.Valid {
+		return
+	}
+	playing := a.currentlyPlaying.Value
+	return playing.IsPlaying, true
+}
+
+func (a *App) SetUser(u types.User) {
+	a.user.user = u
+}
+
+func (a *App) SetTopTracks(tracks []types.Track) {
 	a.user.topTracks = tracks
 }
 
-func (a *App) SetTopArtists(artists *types.UsersTopArtists) {
+func (a *App) SetTopArtists(artists []types.Artist) {
 	a.user.topArtists = artists
+}
+
+func (a *App) SetActiveDevice(device types.Device) {
+	a.activeDevice = Optional[types.Device]{
+		Valid: true,
+		Value: device,
+	}
+}
+
+func (a *App) ActiveDevice() (device types.Device, valid bool) {
+	return a.activeDevice.Value, a.activeDevice.Valid
+}
+
+func (a *App) ActiveDeviceId() (id string, valid bool) {
+	if !a.activeDevice.Valid {
+		return "", false
+	}
+
+	device := a.activeDevice.Value
+
+	if !device.Id.Valid {
+		return "", false
+	}
+
+	return device.Id.Value, true
+}
+
+func (a *App) ActiveDeviceName() (name string, valid bool) {
+	if !a.activeDevice.Valid {
+		return "", false
+	}
+
+	return a.activeDevice.Value.Name, true
+}
+
+func (a *App) ActiveDeviceVolumePercent() (percent int, valid bool) {
+	if !a.activeDevice.Valid {
+		return 
+	}
+
+	device := a.activeDevice.Value
+
+	if !device.VolumePercent.Valid {
+		return
+	}
+
+	return device.VolumePercent.Value, true
 }
 
 func (a *App) GetAuthorizationInfo() AuthorizationInfo {
@@ -336,43 +453,51 @@ func New(clientId, clientSecret, redirectUri string) *App {
 		redirectUri: redirectUri,
 	}
 
-	artists := newSpotifyListModel(nil)
+	artists := NewList(nil)
 	artists.SetShowTitle(true)
 	artists.SetTitle("Artists")
 	artists.SetListDimensions(10, 20)
 
-	tracks := newSpotifyListModel(nil)
+	tracks := NewList(nil)
 	tracks.SetShowTitle(true)
 	tracks.SetTitle("Tracks")
 	tracks.SetListDimensions(10, 20)
 
-	playlists := newSpotifyListModel(nil)
+	playlists := NewList(nil)
 	playlists.SetShowTitle(true)
 	playlists.SetTitle("Playlists")
 	playlists.SetListDimensions(10, 20)
 
-	devices := newSpotifyListModel(nil)
+	devices := NewList(nil)
 	devices.SetShowTitle(true)
 	devices.SetTitle("Devices")
 	devices.SetListDimensions(10, 20)
 
-	grid := grid.New(1, 4)
-	grid.SetModel(artists, 0, 0)
-	grid.SetModel(tracks, 0, 1)
-	grid.SetModel(playlists, 0, 2)
-	grid.SetModel(devices, 0, 3)
+
+	g := grid.New(1, 4)
+	g.SetModel(artists, 0, 0)
+	g.SetModel(tracks, 0, 1)
+	g.SetModel(playlists, 0, 2)
+	g.SetModel(devices, 0, 3)
 	//grid.SetCellDimensions(20, 30)
+
+	posMap := make(map[string]grid.Position)
+	posMap["artists"] = grid.Pos(0, 0)
+	posMap["tracks"] = grid.Pos(0, 1)
+	posMap["playlists"] = grid.Pos(0, 2)
+	posMap["devices"] = grid.Pos(0, 3)
 
 	return &App{
 		authInfo: auth,
 		dbUrl: dburl,
 		configDir: dir,
 		title: "Go-Spotify",
+		posMap: posMap,
 		artists: artists,
 		tracks: tracks,
 		playlists: playlists,
 		devices: devices,
-		grid: grid,
+		grid: g,
 		styles: NewAppStyles(),
 	}
 }
@@ -421,12 +546,12 @@ func (a *App) Setup() error {
 
 }
 
-type GetUserProfileResult struct {
-	result *types.UserProfile
+type GetUserResult struct {
+	result types.User
 }
 
-type GetUsersTopArtistsResult struct {
-	result *types.UsersTopArtists
+type GetUsersTopItems[T any] struct {
+	result types.UsersTopItems[T]
 }
 
 type GetUsersTopTracksResult struct {
@@ -434,7 +559,7 @@ type GetUsersTopTracksResult struct {
 }
 
 type GetUsersPlaylistsResult struct {
-	result *types.CurrentUsersPlaylistResponse
+	result types.CurrentUsersPlaylistResponse
 }
 
 type AuthorizationResponse struct {
@@ -442,11 +567,17 @@ type AuthorizationResponse struct {
 }
 
 type GetAvailableDevicesResult struct {
-	result *types.AvailableDevices
+	result types.AvailableDevices
 }
 
 type GetCurrentlyPlayingTrackResult struct {
 	result *types.CurrentlyPlayingTrack
+	retry bool
+}
+
+type GetCurrentlyPlayingResult struct {
+	result types.CurrentlyPlaying
+	retry bool
 }
 
 type GetCurrentlyPlayingEpisodeResult struct {}
@@ -502,7 +633,7 @@ func GetUserProfile(a *App) tea.Cmd {
 			return AppErr(err)
 		}
 
-		return GetUserProfileResult{ result: profile }
+		return GetUserResult{ result: profile }
 	}
 }
 
@@ -512,13 +643,13 @@ func GetUsersTopArtists(a *App) tea.Cmd {
 			return AppErr(fmt.Errorf("access token is empty in GetUsersTopArtists"))
 		}
 
-		profile, err := a.client.GetUsersTopArtists(a.AccessToken())
+		artists, err := client.GetUsersTopItems[types.Artist](a.client, a.AccessToken(), "artists")
 
 		if err != nil{
 			return AppErr(err)
 		}
 
-		return GetUsersTopArtistsResult { result: profile }
+		return GetUsersTopItems[types.Artist]{ result: artists }
 	}
 }
 
@@ -528,13 +659,13 @@ func GetUsersTopTracks(a *App) tea.Cmd {
 			return AppErr(fmt.Errorf("access token in empty in GetUsersTopTracks"))
 		}
 
-		topTracks, err := a.client.GetUsersTopTracks(a.AccessToken())
+		tracks ,err := client.GetUsersTopItems[types.Track](a.client, a.AccessToken(), "tracks")
 
 		if err != nil {
 			return AppErr(err)
 		}
 
-		return GetUsersTopTracksResult{ result: topTracks }
+		return GetUsersTopItems[types.Track]{ result: tracks }
 	}
 }
 
@@ -593,6 +724,64 @@ func GetCurrentlyPlayingTrack(a *App) tea.Cmd {
 			return AppErr(fmt.Errorf("invalid type"))
 		}
 		
+	}
+}
+
+func GetCurrentlyPlayingCmd(a *App) tea.Cmd {
+	return func() tea.Msg {
+		return GetCurrentlyPlaying(a)
+	}
+}
+
+func GetCurrentlyPlaying(a *App) tea.Msg {
+	if a.AccessToken() == "" {
+		return AppErr(fmt.Errorf("access token in GetCurrentlyPlayingTrack"))
+	}
+
+	accesstoken := a.AccessToken()
+
+	currentlyPlaying, err := a.client.GetCurrentlyPlaying(accesstoken)
+
+	if err != nil {
+		return AppErr(err)
+	}
+
+	return GetCurrentlyPlayingResult{ result: currentlyPlaying, retry: false }
+}
+
+func StartResumePlaybackCmd(a *App) tea.Cmd {
+	return func() tea.Msg {
+		accessToken := a.AccessToken()
+
+		deviceId, valid := a.ActiveDeviceId()
+
+		if !valid {
+			return AppErr(fmt.Errorf("active device is either not set or active device id is not set"))
+		}
+
+		if err := a.client.StartResumePlayback(accessToken, deviceId); err != nil {
+			return AppErr(err)
+		}
+
+		return nil
+	}
+}
+
+func PausePlaybackCmd(a *App) tea.Cmd {
+	return func() tea.Msg {
+		accessToken := a.AccessToken()
+
+		deviceId, valid := a.ActiveDeviceId()
+
+		if !valid {
+			return AppErr(fmt.Errorf("active device is either not set or active device id is not set"))
+		}
+
+		if err := a.client.PausePlayback(accessToken, deviceId); err != nil {
+			return AppErr(err)
+		}
+
+		return nil
 	}
 }
 

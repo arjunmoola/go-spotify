@@ -306,7 +306,9 @@ func encodeClientInfo(id, secret string) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(id + ":" + secret))
 }
 
-func (c *Client) GetCurrentUsersPlaylists(accessToken string, limit int, offset int) (*types.CurrentUsersPlaylistResponse, error) {
+func (c *Client) GetCurrentUsersPlaylists(accessToken string, limit int, offset int) (types.CurrentUsersPlaylistResponse, error) {
+
+	var playlists types.CurrentUsersPlaylistResponse
 
 	value := make(url.Values)
 	value.Set("limit", strconv.Itoa(limit))
@@ -315,7 +317,7 @@ func (c *Client) GetCurrentUsersPlaylists(accessToken string, limit int, offset 
 	u, err := url.Parse(spotifyWebApiUrl + "/playlists")
 
 	if err != nil {
-		return nil, err
+		return playlists, err
 	}
 
 	u.RawQuery = value.Encode()
@@ -323,91 +325,124 @@ func (c *Client) GetCurrentUsersPlaylists(accessToken string, limit int, offset 
 	req, err := http.NewRequest("GET", u.String(), nil)
 
 	if err != nil {
-		return nil, err
+		return playlists, err
 	}
 
 	setAuthorizationHeader(req, accessToken)
 
-	playlistResp := types.CurrentUsersPlaylistResponse{}
-
-	if err := c.fetchResponse(req, &playlistResp); err != nil {
-		return nil, err
+	if err := c.fetchResponse(req, &playlists); err != nil {
+		return playlists, err
 	}
 
-	return &playlistResp, nil
+	return playlists, nil
 }
 
-func (c *Client) GetCurrentUserProfile(accessToken string) (*types.UserProfile, error) {
+func (c *Client) GetCurrentUserProfile(accessToken string) (types.User, error) {
+	var profile types.User
 	u, err := url.Parse(spotifyWebApiUrl)
 
 	if err != nil {
-		return nil, err
+		return profile, err
 	}
 
 	req, err := http.NewRequest("GET", u.String(), nil)
 
 	if err != nil {
-		return nil, err
+		return profile, err
 	}
 
 	setAuthorizationHeader(req, accessToken)
 
-	profile := types.UserProfile{}
-
 	if err := c.fetchResponse(req, &profile); err != nil {
-		return nil, err
+		return profile, err
 	}
 
-	return &profile, nil
+	return profile, nil
 }
 
-func (c *Client) GetUsersTopTracks(accessToken string) (*types.UsersTopTracks, error) {
+func GetUsersTopItems[T any](client *Client, accessToken string, itemType string) (types.UsersTopItems[T], error) {
+	var items types.UsersTopItems[T]
+
+	if itemType != "tracks" && itemType != "artists" {
+		return items, fmt.Errorf("incorrent item type provided")
+	}
+
+	path, err := url.JoinPath(spotifyWebApiUrl, "top", itemType)
+
+	if err != nil {
+		return items, err
+	}
+
+	u, err := url.Parse(path)
+
+	if err != nil {
+		return items, err
+	}
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+
+	if err != nil {
+		return items, err
+	}
+
+	setAuthorizationHeader(req, accessToken)
+
+	if err := client.fetchResponse(req, &items); err != nil {
+		return items, err
+	}
+
+	return items, nil
+
+}
+
+func (c *Client) GetUsersTopTracks(accessToken string) (types.UsersTopItems[types.Track], error) {
+	var tracks types.UsersTopItems[types.Track]
 	path, err := url.JoinPath(spotifyWebApiUrl, "top", "tracks")
 
 	if err != nil {
-		return nil, err
+		return tracks, err
 	}
 
 	u, err := url.Parse(path)
 
 	if err != nil {
-		return nil, err
+		return tracks, err
 	}
 
 	req, err := http.NewRequest("GET", u.String(), nil)
 
 	if err != nil {
-		return nil, err
+		return tracks, err
 	}
 
 	setAuthorizationHeader(req, accessToken)
 
-	var topTracks types.UsersTopTracks
-
-	if err := c.fetchResponse(req, &topTracks); err != nil {
-		return nil, err
+	if err := c.fetchResponse(req, &tracks); err != nil {
+		return tracks, err
 	}
 
-	return &topTracks, nil
+	return tracks, nil
 }
 
-func (c *Client) GetUsersTopArtists(accessToken string) (*types.UsersTopArtists, error) {
+func (c *Client) GetUsersTopArtists(accessToken string) (types.UsersTopItems[types.Artist], error) {
+	var artists types.UsersTopItems[types.Artist]
+
 	path, err := url.JoinPath(spotifyWebApiUrl, "top", "artists")
 
 	if err != nil {
-		return nil, err
+		return artists, err
 	}
 
 	u, err := url.Parse(path)
 
 	if err != nil {
-		return nil, err
+		return artists, err
 	}
 
 	req, err := http.NewRequest("GET", u.String(), nil)
 
 	if err != nil {
-		return nil, err
+		return artists, err
 	}
 
 	setAuthorizationHeader(req, accessToken)
@@ -415,17 +450,19 @@ func (c *Client) GetUsersTopArtists(accessToken string) (*types.UsersTopArtists,
 	var topArtists types.UsersTopArtists
 
 	if err := c.fetchResponse(req, &topArtists); err != nil {
-		return nil, err
+		return artists, err
 	}
 
-	return &topArtists, nil
+	return artists, nil
 }
 
-func (c *Client) GetPlaybackStateTrack(accessToken string) (*types.PlayBackStateTrack, error) {
+func (c *Client) GetPlaybackStateTrack(accessToken string) (types.PlaybackState, error) {
+	var state types.PlaybackState
+
 	path, err := url.JoinPath(spotifyWebApiUrl, "player")
 
 	if err != nil {
-		return nil, err
+		return state, err
 	}
 
 	values := make(url.Values)
@@ -434,25 +471,23 @@ func (c *Client) GetPlaybackStateTrack(accessToken string) (*types.PlayBackState
 	u, err := url.Parse(path)
 
 	if err != nil {
-		return nil, err
+		return state, err
 	}
 	u.RawQuery = values.Encode()
 
 	req, err := http.NewRequest("GET", u.String(), nil)
 
 	if err != nil {
-		return nil, err
+		return state, err
 	}
 
 	setAuthorizationHeader(req, accessToken)
 
-	rsp := types.PlayBackStateTrack{}
-
-	if err := c.fetchResponse(req, &rsp); err != nil {
-		return nil, err
+	if err := c.fetchResponse(req, &state); err != nil {
+		return state, err
 	}
 
-	return &rsp, nil
+	return state, nil
 }
 
 type SpotifyError struct {
@@ -502,34 +537,148 @@ func (c *Client) TransferPlayback(accessToken string, deviceId string, play bool
 	return c.fetchResponse(req, nil)
 }
 
-func (c *Client) GetAvailableDevices(accessToken string) (*types.AvailableDevices, error) {
+func (c *Client) GetAvailableDevices(accessToken string) (types.AvailableDevices, error) {
+	var devices types.AvailableDevices
+
 	path, err := url.JoinPath(spotifyWebApiUrl, "player", "devices")
 
 	if err != nil {
-		return nil, err
+		return devices, err
 	}
 
 	u, err := url.Parse(path)
 
 	if err != nil {
-		return nil, err
+		return devices, err
 	}
 
 	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
 
 	if err != nil {
-		return nil, err
+		return devices, err
 	}
 
 	setAuthorizationHeader(req, accessToken)
 
-	var devices types.AvailableDevices
-
 	if err := c.fetchResponse(req, &devices); err != nil {
-		return nil, err
+		return devices, err
 	}
 
-	return &devices, nil
+	return devices, nil
+}
+
+func (c *Client) GetCurrentlyPlaying(accessToken string) (types.CurrentlyPlaying, error) {
+	var item types.CurrentlyPlaying
+
+	path, err := url.JoinPath(spotifyWebApiUrl, "player", "currently-playing")
+
+	if err != nil {
+		return item, err
+	}
+
+	values := make(url.Values)
+	values.Set("market", "US")
+
+	u, err := url.Parse(path)
+
+	if err != nil {
+		return item, err
+	}
+	u.RawQuery = values.Encode()
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+
+	if err != nil {
+		return item, err
+	}
+
+	setAuthorizationHeader(req, accessToken)
+
+	if err := c.fetchResponse(req, &item); err != nil {
+		return item, err
+	}
+
+	return item, nil
+
+}
+
+type StartResumePayload struct {
+	ContextUri string `json:"context_uri,omitempty"`
+	Uris string `json:"uris,omitempty"`
+	Offset []string `json:"offset,omitempty"`
+	PositionMs int `json:"position_ms"`
+}
+
+func (c *Client) StartResumePlayback(accessTokens string, deviceId string) error {
+	path, err := url.JoinPath(spotifyWebApiUrl, "player", "play")
+
+	if err != nil {
+		return err
+	}
+
+	values := make(url.Values)
+
+	values.Set("device_id", deviceId)
+
+	u, err := url.Parse(path)
+
+	if err != nil {
+		return err
+	}
+
+	u.RawQuery = values.Encode()
+
+	payload := StartResumePayload{
+		PositionMs: 0,
+	}
+
+	data, err := json.Marshal(payload)
+
+	if err != nil {
+		return err
+	}
+
+	buf := bytes.NewBuffer(data)
+
+	req, err := http.NewRequest("PUT", u.String(), buf)
+
+	if err != nil {
+		return err
+	}
+
+	setAuthorizationHeader(req, accessTokens)
+
+	return c.fetchResponse(req, nil)
+}
+
+func (c *Client) PausePlayback(accessTokens string, deviceId string) error {
+	path, err := url.JoinPath(spotifyWebApiUrl, "player", "pause")
+
+	if err != nil {
+		return err
+	}
+
+	values := make(url.Values)
+
+	values.Set("device_id", deviceId)
+
+	u, err := url.Parse(path)
+
+	if err != nil {
+		return err
+	}
+
+	u.RawQuery = values.Encode()
+
+	req, err := http.NewRequest("PUT", u.String(), nil)
+
+	if err != nil {
+		return err
+	}
+
+	setAuthorizationHeader(req, accessTokens)
+
+	return c.fetchResponse(req, nil)
 }
 
 func (c *Client) GetCurrentlyPlayingTrack(accessToken string) (any, error) {
@@ -658,9 +807,18 @@ func checkResponseCode(resp *http.Response) error {
 
 	msg := SpotifyError{}
 
-	if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil {
-		return fmt.Errorf("unable to read resp body for err msg %v", err)
+	data, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return err
 	}
+
+	msg.Message = string(data)
+	msg.Status = resp.StatusCode
+
+	//if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil {
+	//	return fmt.Errorf("unable to read resp body for err msg %v", err)
+	//}
 
 	return msg
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"time"
 	"fmt"
 	"strings"
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,7 +26,7 @@ func (a *App) Init() tea.Cmd {
 	b.Append(GetUserProfile(a))
 	b.Append(GetUsersPlaylist(a))
 	b.Append(GetAvailableDevices(a))
-	b.Append(GetCurrentlyPlayingTrack(a))
+	b.Append(GetCurrentlyPlayingCmd(a))
 	return b.Cmd()
 }
 
@@ -33,38 +34,55 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var b Batch
 
 	switch msg := msg.(type) {
-	case GetUserProfileResult:
-		a.SetProfile(msg.result)
+	case GetUserResult:
+		a.SetUser(msg.result)
 		a.msgs = append(a.msgs , "got set profile result")
-	case GetUsersTopArtistsResult:
-		a.SetTopArtists(msg.result)
-		b.Append(a.artists.SetItemsFromResult(msg.result))
-
-		m := a.grid.At(0, 0).(spotifyList)
-		m.SetItemsFromResult(msg.result)
-		a.grid.SetModel(m, 0, 0)
-	case GetUsersTopTracksResult:
-		a.SetTopTracks(msg.result)
-		b.Append(a.tracks.SetItemsFromResult(msg.result))
-
-		m := a.grid.At(0, 1).(spotifyList)
-		m.SetItemsFromResult(msg.result)
-		a.grid.SetModel(m, 0, 1)
+	case GetUsersTopItems[types.Artist]:
+		a.SetTopArtists(msg.result.Items)
+		pos := a.posMap["artists"]
+		m := a.grid.At(pos).(List)
+		b.Append(SetItems(&m, msg.result.Items))
+		a.grid.SetModelPos(m, pos)
+	case GetUsersTopItems[types.Track]:
+		a.SetTopTracks(msg.result.Items)
+		b.Append(SetItems(&a.tracks, msg.result.Items))
+		pos := a.posMap["tracks"]
+		m := a.grid.At(pos).(List)
+		b.Append(SetItems(&m, msg.result.Items))
+		a.grid.SetModelPos(m, pos)
 	case GetUsersPlaylistsResult:
-		b.Append(a.playlists.SetItemsFromResult(msg.result))
-		m := a.grid.At(0, 2).(spotifyList)
-		m.SetItemsFromResult(msg.result)
-		a.grid.SetModel(m, 0, 2)
+		b.Append(SetItems(&a.playlists, msg.result.Items))
+		pos := a.posMap["playlists"]
+		m := a.grid.At(pos).(List)
+		b.Append(SetItems(&m, msg.result.Items))
+		a.grid.SetModelPos(m, pos)
 	case GetCurrentlyPlayingTrackResult:
 		if msg.result != nil {
-			a.msgs = append(a.msgs, fmt.Sprintf("got valid result"))
+			a.foundCurrentlyPlaying = true
+			a.msgs = append(a.msgs, "got valid result")
 		}
+	case GetCurrentlyPlayingResult:
+		if msg.retry {
+			break
+		}
+		a.retrying = false
+		a.SetCurrentlyPlaying(msg.result)
+		b.Append(tea.Tick(1*time.Second, func (_ time.Time) tea.Msg {
+			return GetCurrentlyPlaying(a)
+		}))
 	case GetAvailableDevicesResult:
-		//a.msgs = append(a.msgs, fmt.Sprintf("num of devices: %d", len(msg.result.Devices)))
-		b.Append(a.devices.SetItemsFromResult(msg.result))
-		m := a.grid.At(0, 3).(spotifyList)
-		m.SetItemsFromResult(msg.result)
-		a.grid.SetModel(m, 0, 3)
+		b.Append(SetItems(&a.devices, msg.result.Devices))
+		pos := a.posMap["devices"]
+		m := a.grid.At(pos).(List)
+		b.Append(SetItems(&m, msg.result.Devices))
+		a.grid.SetModelPos(m, pos)
+
+		for _, device := range msg.result.Devices {
+			if device.IsActive {
+				a.SetActiveDevice(device)
+				break
+			}
+		}
 	case AuthorizationResponse:
 	case UpdateConfigResult:
 		a.msgs = append(a.msgs, "config updated")
@@ -100,40 +118,68 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if a.grid.Focus() {
 				a.grid.SetFocus(false)
-				a.info = infoModel{}
+				//a.info = infoModel{}
 				break
 			}
 			return a, tea.Quit
 		case "q":
 			return a, tea.Quit
+		case "p":
+			isPlaying, valid := a.IsPlaying()
+
+			if !valid  {
+				break
+			}
+
+			if isPlaying {
+				b.Append(PausePlaybackCmd(a))
+			} else {
+				b.Append(StartResumePlaybackCmd(a))
+			}
+
 		case "enter":
 			if !a.grid.Focus() {
-				i, j := a.grid.Cursor()
-				if _, ok := a.grid.At(i, j).(spotifyList); ok {
+				pos := a.grid.Cursor()
+				if _, ok := a.grid.At(pos).(List); ok {
 					a.grid.SetFocus(true)
 				}
 			} else {
-				i, j := a.grid.Cursor()
-				m, ok := a.grid.At(i, j).(spotifyList)
+				pos := a.grid.Cursor()
+				_, ok := a.grid.At(pos).(List)
 				if !ok {
 					break
 				}
-				selectedValue := m.list.SelectedItem()
-				switch item := selectedValue.(type) {
-				case artistItem:
-					a.info.artistName = item.artist.Name
-				case trackItem:	
-					a.info.trackName = item.track.Name
-				case playlistItem:
-					a.info.artistName = item.playlist.Name
-					a.info.description = item.playlist.Description
-				case deviceItem:
-					a.info.deviceName = item.device.Name
-					a.info.deviceId = item.device.Id
-					a.info.deviceType = item.device.Type
-					a.info.isActive = item.device.IsActive
-				}
+				//selectedValue := m.list.SelectedItem()
+				//switch item := selectedValue.(type) {
+				//case artistItem:
+				//	a.info.artistName = item.artist.Name
+				//case trackItem:	
+				//	a.info.trackName = item.track.Name
+				//case playlistItem:
+				//	a.info.artistName = item.playlist.Name
+				//	a.info.description = item.playlist.Description
+				//case deviceItem:
+				//	device := ActiveDevice{
+				//		name: item.device.Name,
+				//		id: item.device.Id,
+				//		volumePercent: item.device.VolumePercent,
+				//		supportsVolume: item.device.SupportsVolumne,
+				//	}
+				//	a.SetActiveDevice(device)
+				//	a.info.deviceName = item.device.Name
+				//	a.info.deviceId = item.device.Id
+				//	a.info.deviceType = item.device.Type
+				//	a.info.isActive = item.device.IsActive
+				//}
 			}
+		//case "r":
+		//	if a.CurrentlyPlayingIsValid() {
+		//		break
+		//	}
+
+		//	if !a.retrying {
+		//		b.Append(GetCurrentlyPlaying(a))
+		//	}
 		}
 	}
 
@@ -141,6 +187,47 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	b.Append(cmd)
 
 	return a, b.Cmd()
+}
+
+func (a *App) viewCurrentlyPlaying() string {
+	playing, ok := a.CurrentlyPlaying()
+
+	if !ok {
+		return "unable to get currently playing information"
+	}
+
+	var s string
+
+	if playing.Item.Value.Type == "track" {
+		item := playing.Item.Value.Track
+		s += item.Name + "\n"
+		s += fmt.Sprintf("%d/%d\n", playing.ProgressMs.Value, item.DurationMs)
+		s += fmt.Sprintf("playing: %t\n", playing.IsPlaying) 
+		s += fmt.Sprintf("device: %s\n", playing.Device.Name)
+		s += fmt.Sprintf("device is active: %t\n", playing.Device.IsActive)
+	} else {
+		item := playing.Item.Value.Episode
+		s += item.Name + " "
+		s += fmt.Sprintf("%d", item.DurationMs) + " "
+		s += fmt.Sprintf("%t", playing.IsPlaying)
+	}
+
+	return a.styles.currentlyPlaying.Width(20).Render(s)
+}
+
+func (a *App) viewActiveDevice() string {
+	device, valid := a.ActiveDevice()
+
+	if !valid {
+		return "unable to get active device information"
+	}
+
+	var s string
+
+	s += fmt.Sprintf("name: %s\n", device.Name)
+	s += fmt.Sprintf("id: %s\n", device.Id.Value)
+
+	return a.styles.currentlyPlaying.Width(20).Render(s)
 }
 
 func (a *App) View() string {
@@ -167,7 +254,9 @@ func (a *App) View() string {
 
 	msgsView := strings.Join(a.msgs, "\n")
 
-	s := lipgloss.JoinHorizontal(lipgloss.Left, a.grid.View(), a.info.View())
+	s := lipgloss.JoinHorizontal(lipgloss.Left, a.grid.View(), "hello")
+	s = lipgloss.JoinVertical(lipgloss.Left, s, a.viewCurrentlyPlaying())
+	s = lipgloss.JoinVertical(lipgloss.Left, s, a.viewActiveDevice())
 	s = lipgloss.JoinVertical(lipgloss.Center, s, msgsView)
 
 	errView := ""
@@ -224,8 +313,4 @@ func (i infoModel) View() string {
 	fmt.Fprintln(builder, "isActive:", i.isActive)
 
 	return builder.String()
-}
-
-type currentlyPlayingModel struct {
-	currentlyPlaying *types.CurrentlyPlayingTrack
 }

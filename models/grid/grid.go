@@ -98,7 +98,14 @@ func (m *Model) SetModel(model tea.Model, i, j int) {
 	m.models[i*m.cols+j] = model
 }
 
-func (m Model) At(i, j int) tea.Model {
+func (m *Model) SetModelPos(model tea.Model, pos Position) {
+	i, j := pos.Row, pos.Col
+	m.models[i*m.cols+j] = model
+}
+
+func (m Model) At(pos Position) tea.Model {
+	i := pos.Row
+	j := pos.Col
 	return m.models[i*m.cols+j]
 }
 
@@ -113,6 +120,10 @@ const (
 
 type Position struct {
 	Row, Col int
+}
+
+func Pos(i, j int) Position {
+	return Position{ i, j }
 }
 
 func (m *Model) updateCursor(dir string) {
@@ -145,10 +156,10 @@ func (m *Model) updateCursor(dir string) {
 
 }
 
-func (m Model) Cursor() (row int, col int) {
+func (m Model) Cursor() Position {
 	i := m.cursor/m.cols
 	j := m.cursor%m.cols
-	return i, j
+	return Position{ i, j }
 }
 
 
