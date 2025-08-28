@@ -2,6 +2,7 @@ package app
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
@@ -161,4 +162,15 @@ func (l List) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (l List) View() string {
 	return l.l.View()
+}
+
+func NewTable() table.Model {
+	t := table.New()
+	columns := []table.Column{
+		{ Title: "Name", Width: 10 },
+		{ Title: "Artist", Width: 10 },
+		{ Title: "Duration", Width: 10 },
+	}
+	t.SetColumns(columns)
+	return t
 }
