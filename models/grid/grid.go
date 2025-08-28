@@ -175,7 +175,11 @@ func (m *Model) updateCursor(dir string) {
 	}
 
 	if newJ < 0 || newJ >= len(m.models[newI]) {
-		newJ = j
+		if len(m.models[newI]) -1 > -1 {
+			newJ = len(m.models[newI])-1
+		} else {
+			newJ = j
+		}
 	}
 
 	m.pos = Position{ newI, newJ }

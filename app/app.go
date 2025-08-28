@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/progress"
 	"fmt"
 	"time"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"go-spotify/database"
 	"go-spotify/client"
 	"go-spotify/models/grid"
+	"go-spotify/models/media"
 	//"go-spotify/models/list"
 	//"github.com/charmbracelet/bubbles/list"
 	_ "github.com/tursodatabase/go-libsql"
@@ -190,12 +192,18 @@ type AppStyles struct {
 	currentModel lipgloss.Style
 	focusedModel lipgloss.Style
 	currentlyPlaying lipgloss.Style
+	artistStyle lipgloss.Style
+	skipButtonStyle lipgloss.Style
+	progressBarStyle lipgloss.Style
 }
 
 func NewAppStyles() AppStyles {
 	defaultStyle := lipgloss.NewStyle()
 	generalModelStyle := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder())
-	currentlyPlaying := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder())
+	currentlyPlaying := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder())
+	artistStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder())
+	skipButtonsStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder())
+	progressBarStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder())
 
 	return AppStyles{
 		title: defaultStyle.Foreground(lipgloss.Color("200")),
@@ -203,6 +211,9 @@ func NewAppStyles() AppStyles {
 		track: generalModelStyle,
 		focusedModel: generalModelStyle.BorderForeground(lipgloss.Color("200")),
 		currentlyPlaying: currentlyPlaying,
+		artistStyle: artistStyle,
+		skipButtonStyle: skipButtonsStyle,
+		progressBarStyle: progressBarStyle,
 	}
 }
 
@@ -250,6 +261,7 @@ type UserInfo struct {
 }
 
 type App struct {
+	mediaFocus bool
 	client *client.Client
 	authInfo AuthorizationInfo
 	user UserInfo
@@ -270,6 +282,8 @@ type App struct {
 	posMap map[string]grid.Position
 	typeMap map[grid.Position]string
 
+	media media.Model
+
 	title string
 	artists List
 	tracks List
@@ -284,6 +298,7 @@ type App struct {
 	retrying bool
 	currentlyPlayingRetryCount int
 
+	progress progress.Model
 	playbackState Optional[types.PlaybackState]
 	activeDevice Optional[types.Device]
 	currentlyPlaying Optional[types.CurrentlyPlaying]
@@ -515,9 +530,12 @@ func New(clientId, clientSecret, redirectUri string) *App {
 	queue.SetListDimensions(10, 20)
 
 	row := grid.NewRow(artists, tracks, playlists, playlistItems, devices, queue)
+	media := media.New("prev", "play", "next", "up", "down")
+	row2 := grid.NewRow(media)
 
 	g := grid.New()
 	g.Append(row)
+	g.Append(row2)
 	//g.SetModel(artists, 0, 0)
 	//g.SetModel(tracks, 0, 1)
 	//g.SetModel(playlists, 0, 2)
@@ -533,12 +551,16 @@ func New(clientId, clientSecret, redirectUri string) *App {
 	posMap["playlist_items"] = grid.Pos(0, 3)
 	posMap["devices"] = grid.Pos(0, 4)
 	posMap["queue"] = grid.Pos(0, 5)
+	posMap["media"] = grid.Pos(1, 0)
 
 	typeMap := make(map[grid.Position]string)
 
 	for k, v := range posMap {
 		typeMap[v] = k
 	}
+
+	progress := progress.New()
+	progress.ShowPercentage = false
 
 	return &App{
 		authInfo: auth,
@@ -553,6 +575,7 @@ func New(clientId, clientSecret, redirectUri string) *App {
 		devices: devices,
 		grid: g,
 		styles: NewAppStyles(),
+		progress: progress,
 	}
 }
 
@@ -649,6 +672,10 @@ type UpdateConfigResult struct {}
 type RenewRefreshTokenResult struct {
 	result *client.SpotifyRefreshTokenResponse
 }
+
+type AddItemToQueueResult struct{}
+type SkipItemResult struct{}
+type UpdatePlaybackResult struct{}
 
 type Shutdown struct{}
 
@@ -866,7 +893,7 @@ func SkipSongCmd(a *App, action string) tea.Cmd {
 			return AppErr(err)
 		}
 
-		return nil
+		return SkipItemResult{}
 	}
 }
 
@@ -901,6 +928,7 @@ func GetPlaylistItemsCmd(a *App, playlistId string) tea.Cmd {
 	}
 }
 
+
 func AddItemToQueueCmd(a *App, uri string) tea.Cmd {
 	return func() tea.Msg {
 		accessToken := a.AccessToken()
@@ -915,7 +943,7 @@ func AddItemToQueueCmd(a *App, uri string) tea.Cmd {
 			return AppErr(err)
 		}
 
-		return nil
+		return AddItemToQueueResult{}
 	}
 }
 

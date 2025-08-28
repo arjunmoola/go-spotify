@@ -7,13 +7,20 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
+	"go-spotify/models/grid"
 	"go-spotify/types"
+	"go-spotify/models/media"
 )
 
 type Batch []tea.Cmd
 
 func (b *Batch) Append(cmds... tea.Cmd) {
-	*b = append(*b, cmds...)
+	for _, cmd := range cmds {
+		if cmd == nil {
+			continue
+		}
+		*b = append(*b, cmd)
+	}
 }
 
 func (b Batch) Cmd() tea.Cmd {
@@ -35,39 +42,36 @@ func (a *App) Init() tea.Cmd {
 
 func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var b Batch
+	push := b.Append
 
 	switch msg := msg.(type) {
 	case GetUserResult:
 		a.SetUser(msg.result)
 		a.msgs = append(a.msgs , "got set profile result")
 	case GetUsersTopItems[types.Artist]:
-		a.SetTopArtists(msg.result.Items)
 		pos := a.posMap["artists"]
 		m := a.grid.At(pos).(List)
-		b.Append(SetItems(&m, msg.result.Items))
+		push(SetItems(&m, msg.result.Items))
 		a.grid.SetModelPos(m, pos)
 	case GetUsersTopItems[types.Track]:
-		a.SetTopTracks(msg.result.Items)
-		b.Append(SetItems(&a.tracks, msg.result.Items))
 		pos := a.posMap["tracks"]
 		m := a.grid.At(pos).(List)
-		b.Append(SetItems(&m, msg.result.Items))
+		push(SetItems(&m, msg.result.Items))
 		a.grid.SetModelPos(m, pos)
 	case GetUsersPlaylistsResult:
-		b.Append(SetItems(&a.playlists, msg.result.Items))
 		pos := a.posMap["playlists"]
 		m := a.grid.At(pos).(List)
-		b.Append(SetItems(&m, msg.result.Items))
+		push(SetItems(&m, msg.result.Items))
 		a.grid.SetModelPos(m, pos)
 	case GetUsersQueueResult:
 		pos := a.posMap["queue"]
 		m := a.grid.At(pos).(List)
-		b.Append(SetItems(&m, msg.result.Queue))
+		push(SetItems(&m, msg.result.Queue))
 		a.grid.SetModelPos(m, pos)
 	case GetPlaylistItemsResult:
 		pos := a.posMap["playlist_items"]
 		m := a.grid.At(pos).(List)
-		b.Append(SetItems(&m, msg.result.Items))
+		push(SetItems(&m, msg.result.Items))
 		a.grid.SetModelPos(m, pos)
 	case GetCurrentlyPlayingTrackResult:
 		if msg.result != nil {
@@ -80,14 +84,14 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.retrying = false
 		a.SetCurrentlyPlaying(msg.result)
-		b.Append(tea.Tick(1*time.Second, func (_ time.Time) tea.Msg {
+		updateMediaInfo(a)
+		push(tea.Tick(1*time.Second, func (_ time.Time) tea.Msg {
 			return GetCurrentlyPlaying(a)
 		}))
 	case GetAvailableDevicesResult:
-		b.Append(SetItems(&a.devices, msg.result.Devices))
 		pos := a.posMap["devices"]
 		m := a.grid.At(pos).(List)
-		b.Append(SetItems(&m, msg.result.Devices))
+		push(SetItems(&m, msg.result.Devices))
 		a.grid.SetModelPos(m, pos)
 
 		for _, device := range msg.result.Devices {
@@ -104,8 +108,15 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.err = append(a.err, err)
 			break
 		}
-		b.Append(UpdateConfig(a, a.GetAuthorizationInfo()))
-		b.Append(RenewRefreshTokenTick(a, a.GetAuthorizationInfo()))
+		push(
+			UpdateConfig(a, a.GetAuthorizationInfo()),
+			RenewRefreshTokenTick(a, a.GetAuthorizationInfo()),
+		)
+	case AddItemToQueueResult:
+		a.msgs = append(a.msgs, "received add item to queue result")
+		push(GetUsersQueueCmd(a))
+	case SkipItemResult:
+		push(GetUsersQueueCmd(a))
 	case Shutdown:
 		a.db.Close()
 		return a, tea.Quit
@@ -116,15 +127,61 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, b.Cmd()
 }
 
+func updateMediaInfo(a *App) {
+	if !a.CurrentlyPlayingIsValid() {
+		return
+	}
+
+	progress := float64(a.currentlyPlaying.Value.ProgressMs.Value)
+
+	playing := a.CurrentlyPlayingItem()
+
+	var name string
+	var duration float64
+
+	if playing.Type == "track" {
+		name = playing.Track.Name
+		duration = float64(playing.Track.DurationMs)
+	} else {
+		name = playing.Episode.Name
+		duration = float64(playing.Track.DurationMs)
+	}
+
+	percent := progress/duration
+
+	pos := a.posMap["media"]
+	m, ok := a.grid.At(pos).(media.Model)
+
+	if !ok {
+		return
+	}
+	m.SetArtist(name)
+	m.SetPercent(percent)
+	a.grid.SetModelPos(m, pos)
+}
+
+func updateMediaDims(a *App) {
+	pos := a.posMap["media"]
+	m, ok := a.grid.At(pos).(media.Model)
+	if !ok {
+		return
+	}
+	m.SetWidth(a.width)
+	a.grid.SetModelPos(m, pos)
+}
+
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var b Batch
+	push := b.Append
+
 	_, cmd := a.updateResults(msg)
-	b.Append(cmd)
+	push(cmd)
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.height = msg.Height
 		a.width = msg.Width
+		updateMediaDims(a)
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
@@ -132,49 +189,99 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if a.grid.Focus() {
 				a.grid.SetFocus(false)
-				//a.info = infoModel{}
 				break
 			}
 			return a, tea.Quit
 		case "q":
 			return a, tea.Quit
 		case "p":
-			isPlaying, valid := a.IsPlaying()
-
-			if !valid  {
-				break
-			}
-			if isPlaying {
-				b.Append(PausePlaybackCmd(a))
-			} else {
-				b.Append(StartResumePlaybackCmd(a))
-			}
+			push(updatePlaybackStatus(a))
 		case "n":
-			if !a.CurrentlyPlayingIsValid() {
-				break
-			}
-			b.Append(SkipSongCmd(a, "next"), GetUsersQueueCmd(a))
+			push(updateSkipNext(a))
 		case "b":
-			if !a.CurrentlyPlayingIsValid() {
-				break
-			}
-			b.Append(SkipSongCmd(a, "previous"), GetUsersQueueCmd(a))
+			push(updateSkipPrev(a))
+			//if !a.CurrentlyPlayingIsValid() {
+			//	break
+			//}
+			//push(SkipSongCmd(a, "previous"), GetUsersQueueCmd(a))
+		case "a":
+			push(handleAddItem(a))
 		case "enter":
 			if !a.grid.Focus() {
 				pos := a.grid.Cursor()
-				if _, ok := a.grid.At(pos).(List); ok {
+				switch a.grid.At(pos).(type) {
+				case List, media.Model:
 					a.grid.SetFocus(true)
 				}
 			} else {
-				b.Append(handleSelection(a))
+				pos := a.grid.Cursor()
+				switch m := a.grid.At(pos).(type) {
+				case List:
+					push(handleSelection(a))
+				case media.Model:
+					push(updateMediaControlSelection(a, m, pos))
+				}
 			}
 		}
 	}
 
 	a.grid, cmd = a.grid.Update(msg)
-	b.Append(cmd)
+	push(cmd)
 
 	return a, b.Cmd()
+}
+
+func updateMediaControlSelection(a *App, m media.Model, pos grid.Position) tea.Cmd {
+	var cmd tea.Cmd
+	button := m.SelectedItem()
+	switch button {
+	case "play":
+		m.SetItem("pause", m.Index())
+		cmd = m.PressButton()
+		//return tea.Batch(updatePlaybackStatus(a), m.PressButton())
+	case "pause":
+		m.SetItem("play", m.Index())
+		cmd = m.PressButton()
+		//return tea.Batch(updatePlaybackStatus(a), m.PressButton())
+	case "prev":
+		cmd = m.PressButton()
+		//return tea.Batch(updateSkipPrev(a), m.PressButton())
+	case "next":
+		cmd = m.PressButton()
+		//return tea.Batch(updateSkipNext(a), m.PressButton())
+	case "up":
+	case "down":
+	}
+	a.grid.SetModelPos(m, pos)
+	return cmd
+}
+
+func updatePlaybackStatus(a *App) tea.Cmd {
+	isPlaying, valid := a.IsPlaying()
+
+	if !valid  {
+		return nil
+	}
+
+	if isPlaying {
+		return PausePlaybackCmd(a)
+	}
+
+	return StartResumePlaybackCmd(a)
+}
+
+func updateSkipNext(a *App) tea.Cmd {
+	if !a.CurrentlyPlayingIsValid() {
+		return nil
+	}
+	return SkipSongCmd(a, "next")
+}
+
+func updateSkipPrev(a *App) tea.Cmd {
+	if !a.CurrentlyPlayingIsValid() {
+		return nil
+	}
+	return SkipSongCmd(a, "previous")
 }
 
 func handleSelection(a *App) tea.Cmd {
@@ -196,6 +303,43 @@ func handleSelection(a *App) tea.Cmd {
 	}
 
 	return nil
+}
+
+func handleAddItem(a *App) tea.Cmd {
+	pos := a.grid.Cursor()
+	m, ok := a.grid.At(pos).(List)
+	if !ok {
+		return nil
+	}
+
+	selectedItem := m.l.SelectedItem()
+
+	var uri, msg string
+
+	switch item := selectedItem.(type) {
+	case types.Track:
+		uri = item.Uri
+		msg = "selected item is a track" + " " + uri
+	case types.PlaylistItemUnion:
+		track := item.Track
+		switch track.Type {
+		case "track":
+			uri = item.Track.Track.Uri
+			msg = "selected item is a playlist item track" + " " + uri
+		case "episode":
+		}
+	}
+
+	if msg != "" {
+		a.msgs = append(a.msgs, msg)
+	}
+
+	if uri == "" {
+		a.msgs = append(a.msgs, "uri of the selected item is empty")
+		return nil
+	}
+
+	return AddItemToQueueCmd(a, uri)
 }
 
 func handlePlaylistSelection(a *App, item list.Item) tea.Cmd {
@@ -227,12 +371,13 @@ func (a *App) viewCurrentlyPlaying() string {
 	var s string
 
 	if playing.Item.Value.Type == "track" {
+		var percent float64
 		item := playing.Item.Value.Track
-		s += item.Name + "\n"
-		s += fmt.Sprintf("%d/%d\n", playing.ProgressMs.Value, item.DurationMs)
-		s += fmt.Sprintf("playing: %t\n", playing.IsPlaying) 
-		s += fmt.Sprintf("device: %s\n", playing.Device.Name)
-		s += fmt.Sprintf("device is active: %t\n", playing.Device.IsActive)
+		percent = float64(playing.ProgressMs.Value)/float64(item.DurationMs)
+		songName := a.styles.artistStyle.Render(item.Name)
+		isPlayingView := fmt.Sprintf("playing: %t", playing.IsPlaying)
+		s = lipgloss.JoinVertical(lipgloss.Left, songName, isPlayingView)
+		s = lipgloss.JoinHorizontal(lipgloss.Left, s, a.progress.ViewAs(percent))
 	} else {
 		item := playing.Item.Value.Episode
 		s += item.Name + " "
@@ -240,7 +385,7 @@ func (a *App) viewCurrentlyPlaying() string {
 		s += fmt.Sprintf("%t", playing.IsPlaying)
 	}
 
-	return a.styles.currentlyPlaying.Width(20).Render(s)
+	return a.styles.currentlyPlaying.Width(a.width-5).Render(s)
 }
 
 func (a *App) viewActiveDevice() string {
@@ -304,10 +449,11 @@ func (a *App) View() string {
 	currentlyPlayingView := a.viewCurrentlyPlaying()
 	activeDeviceView := a.viewActiveDevice()
 	stateView := a.viewPlaybackState()
-	row2 := lipgloss.JoinHorizontal(lipgloss.Left, currentlyPlayingView, activeDeviceView, stateView)
+	row2 := lipgloss.JoinHorizontal(lipgloss.Left, activeDeviceView, stateView)
 
 	s := lipgloss.JoinVertical(lipgloss.Left, gridView, row2)
 	s = lipgloss.JoinVertical(lipgloss.Center, s, msgsView)
+	s = lipgloss.JoinVertical(lipgloss.Left, s, currentlyPlayingView)
 
 	errView := ""
 

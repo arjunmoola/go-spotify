@@ -767,11 +767,13 @@ func (c *Client) AddItemToQueue(accessToken string, uri string, deviceId string)
 	setDeviceId(values, deviceId)
 	encodeUrl(u, values)
 
-	req, err := http.NewRequest("GET", u.String(), nil)
+	req, err := http.NewRequest("POST", u.String(), nil)
 
 	if err != nil {
 		return err
 	}
+
+	setAuthorizationHeader(req, accessToken)
 
 	return fetchResponse(c, req, nil)
 }
