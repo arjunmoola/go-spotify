@@ -1,7 +1,10 @@
 package types
 
 import (
+	"github.com/charmbracelet/bubbles/table"
 	"encoding/json"
+	"strings"
+	"fmt"
 )
 
 type Optional[T any] struct {
@@ -74,6 +77,18 @@ func (i PlaylistItemUnion) FilterValue() string {
 	return ""
 }
 
+func (i PlaylistItemUnion) Row() table.Row {
+	var row []string
+
+	if i.Track.Track.Type == "track" {
+		row = i.Track.Track.Row()
+	} else {
+		row = append(row, i.Track.Episode.Name)
+	}
+
+	return row
+}
+
 type Page[T any] struct {
 	Href string `json:"href"`
 	Limit int `json:"limit"`
@@ -107,6 +122,10 @@ type SimplifiedPlaylistObject struct {
 
 func (s SimplifiedPlaylistObject) FilterValue() string {
 	return ""
+}
+
+func (s SimplifiedPlaylistObject) View() string {
+	return s.Name
 }
 
 type SimplifiedPlaylistTrack struct {
@@ -206,6 +225,10 @@ func (a Artist) FilterValue() string {
 	return ""
 }
 
+func (a Artist) View() string {
+	return a.Name
+}
+
 type TopTrack struct {
 	Albums []*Album `json:"albums"`
 	Artists []*SimplifiedArtist `json:"artists"`
@@ -281,6 +304,21 @@ func (t Track) FilterValue() string {
 	return ""
 }
 
+func (t Track) Row() table.Row {
+	var row []string
+	artists := make([]string, 0, len(t.Artists))
+
+	for _, artist := range t.Artists {
+		artists = append(artists, artist.Name)
+	}
+	artist := strings.Join(artists, ",")
+	return append(row, t.Name, artist, t.Album.Name, fmt.Sprintf("%d", t.DurationMs))
+}
+
+func (t Track) View() string {
+	return t.Name
+}
+
 type PlaybackState struct {
 	Device Device `json:"device"`
 	RepeatState bool `json:"repeat_state"`
@@ -314,6 +352,12 @@ type Episode struct {
 
 func (e Episode) FilterValue() string {
 	return ""
+}
+
+func (e Episode) Row() []string {
+	var row []string
+
+	return append(row, e.Name, "", "", fmt.Sprintf("%d", e.DurationMs))
 }
 
 type Restrictions struct {
@@ -425,7 +469,7 @@ type Device struct {
 	IsRestricted bool `json:"is_restricted"`
 	Name string `json:"name"`
 	Type string `json:"type"`
-	VolumePercent Optional[int] `json:"int"`
+	VolumePercent Optional[int] `json:"volume_percent"`
 	SupportsVolumne bool `json:"supports_volume"`
 }
 

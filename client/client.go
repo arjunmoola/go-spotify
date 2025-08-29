@@ -778,6 +778,38 @@ func (c *Client) AddItemToQueue(accessToken string, uri string, deviceId string)
 	return fetchResponse(c, req, nil)
 }
 
+func (c *Client) SetPlaybackVolume(ctx context.Context, deviceId string, percent int) error {
+	accessToken, ok := GetAccessToken(ctx)
+
+	if !ok {
+		return fmt.Errorf("access token not set")
+	}
+
+	u, err := createPlaybackUrl("volume")
+
+	if err != nil {
+		return err
+	}
+
+	values := make(url.Values)
+	setPercentage(values, percent)
+	setDeviceId(values, deviceId)
+	encodeUrl(u, values)
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", u.String(), nil)
+
+	if err != nil {
+		return err
+	}
+
+	setAuthorizationHeader(req, accessToken)
+
+	return fetchResponse(c, req, nil)
+}
+
+func setPercentage(values url.Values, percent int) {
+	values.Set("volume_percent", strconv.Itoa(percent))
+}
 
 func setDeviceId(values url.Values, deviceId string) {
 	values.Set("device_id", deviceId)

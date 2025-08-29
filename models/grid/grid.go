@@ -27,6 +27,8 @@ type Styles struct {
 	Cell lipgloss.Style
 	CurrentCell lipgloss.Style
 	Focus lipgloss.Style
+	model lipgloss.Style
+	row lipgloss.Style
 }
 
 func DefaultStyle() Styles {
@@ -38,12 +40,16 @@ func DefaultStyle() Styles {
 		Cell: cellStyle,
 		CurrentCell: currentCell,
 		Focus: focusStyle,
+		model: lipgloss.NewStyle().BorderStyle(lipgloss.HiddenBorder()).Align(lipgloss.Center),
+		row: lipgloss.NewStyle(),
 	}
 }
 
 type Model struct {
 	rows int
 	cols int
+	width int
+	height int
 	cellWidth int
 	cellHeight int
 	models []Row
@@ -60,6 +66,19 @@ func New() Model {
 		cursor: 0,
 		Styles: DefaultStyle(),
 	}
+}
+
+func (m *Model) SetHeight(h int) {
+	m.height = h
+}
+
+func(m *Model) SetWidth(w int) {
+	m.width = w
+}
+
+func (m *Model) SetGridDimensions(h, w int) {
+	m.SetHeight(h)
+	m.SetWidth(w)
 }
 
 func (m Model) Init() tea.Cmd {
@@ -115,8 +134,8 @@ func (m *Model) AppendRow(model tea.Model, rowIdx int) Position {
 	return Position{ rowIdx, colIdx-1 }
 }
 
-func (m *Model) Append(row Row) int {
-	m.models = append(m.models, row)
+func (m *Model) Append(rows ...Row) int {
+	m.models = append(m.models, rows...)
 	return len(m.models)-1
 }
 
@@ -127,6 +146,10 @@ func (m *Model) SetModelPos(model tea.Model, pos Position) {
 
 func (m Model) At(pos Position) tea.Model {
 	return m.models[pos.Row][pos.Col]
+}
+
+func (m *Model) SetCursor(pos Position) {
+	m.pos = pos
 }
 
 type direction int 
@@ -248,5 +271,5 @@ func (m Model) View() string {
 	builder := &strings.Builder{}
 	rows := slices.Collect(m.renderedRows())
 	builder.WriteString(lipgloss.JoinVertical(lipgloss.Left, rows...))
-	return builder.String()
+	return m.Styles.model.Render(builder.String())
 }

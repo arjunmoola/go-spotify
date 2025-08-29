@@ -6,6 +6,7 @@ import (
 	"strings"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
+	nested "go-spotify/models/list"
 	"github.com/charmbracelet/lipgloss"
 	"go-spotify/models/grid"
 	"go-spotify/types"
@@ -40,6 +41,27 @@ func (a *App) Init() tea.Cmd {
 	return b.Cmd()
 }
 
+func NestedItems[S []T, T nested.Viewer](s S) []nested.Viewer {
+	v := make([]nested.Viewer, 0, len(s))
+
+	for _, item := range s {
+		v = append(v, item)
+	}
+
+	return v
+
+}
+
+func SetSideBarItems[S []T, T nested.Viewer](a *App, title string, s S) {
+	items := NestedItems(s)
+	m, ok := GetModel[nested.NestedList](a, "sidebar")
+	if !ok {
+		return
+	}
+	m.SetItems(title, items)
+	SetModel(a, m, "sidebar")
+}
+
 func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var b Batch
 	push := b.Append
@@ -47,36 +69,28 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case GetUserResult:
 		a.SetUser(msg.result)
-		a.msgs = append(a.msgs , "got set profile result")
+		a.AppendMessage("got setProfile result")
 	case GetUsersTopItems[types.Artist]:
-		pos := a.posMap["artists"]
-		m := a.grid.At(pos).(List)
-		push(SetItems(&m, msg.result.Items))
-		a.grid.SetModelPos(m, pos)
+		a.data["top_artists"] = msg.result.Items
+		SetSideBarItems(a, "Top Artists", msg.result.Items)
 	case GetUsersTopItems[types.Track]:
-		pos := a.posMap["tracks"]
-		m := a.grid.At(pos).(List)
-		push(SetItems(&m, msg.result.Items))
-		a.grid.SetModelPos(m, pos)
+		a.data["top_tracks"] = msg.result.Items
+		SetSideBarItems(a, "Top Tracks", msg.result.Items)
 	case GetUsersPlaylistsResult:
-		pos := a.posMap["playlists"]
-		m := a.grid.At(pos).(List)
-		push(SetItems(&m, msg.result.Items))
-		a.grid.SetModelPos(m, pos)
+		a.data["playlists"] = msg.result.Items
+		SetSideBarItems(a, "Playlists", msg.result.Items)
 	case GetUsersQueueResult:
-		pos := a.posMap["queue"]
-		m := a.grid.At(pos).(List)
+		m, _:= GetModel[List](a, "queue")
 		push(SetItems(&m, msg.result.Queue))
-		a.grid.SetModelPos(m, pos)
+		SetModel(a, m, "queue")
 	case GetPlaylistItemsResult:
-		pos := a.posMap["playlist_items"]
-		m := a.grid.At(pos).(List)
-		push(SetItems(&m, msg.result.Items))
-		a.grid.SetModelPos(m, pos)
+		id := msg.id
+		a.data[id] = msg.result.Items
+		SetTable(a, msg.result.Items)
 	case GetCurrentlyPlayingTrackResult:
 		if msg.result != nil {
 			a.foundCurrentlyPlaying = true
-			a.msgs = append(a.msgs, "got valid result")
+			a.AppendMessage("got valid result")
 		}
 	case GetCurrentlyPlayingResult:
 		if msg.retry {
@@ -102,6 +116,7 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case AuthorizationResponse:
 	case UpdateConfigResult:
+		a.AppendMessage("config updated")
 		a.msgs = append(a.msgs, "config updated")
 	case RenewRefreshTokenResult:
 		if err := a.updateRefreshToken(msg.result); err != nil {
@@ -113,7 +128,7 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 			RenewRefreshTokenTick(a, a.GetAuthorizationInfo()),
 		)
 	case AddItemToQueueResult:
-		a.msgs = append(a.msgs, "received add item to queue result")
+		a.AppendMessage("received add item to queue result")
 		push(GetUsersQueueCmd(a))
 	case SkipItemResult:
 		push(GetUsersQueueCmd(a))
@@ -133,15 +148,21 @@ func updateMediaInfo(a *App) {
 	}
 
 	progress := float64(a.currentlyPlaying.Value.ProgressMs.Value)
+	volumePercent, _ := a.ActiveDeviceVolumePercent()
 
 	playing := a.CurrentlyPlayingItem()
 
 	var name string
+	var artistNames []string
+
 	var duration float64
 
 	if playing.Type == "track" {
 		name = playing.Track.Name
 		duration = float64(playing.Track.DurationMs)
+		for _, artist := range playing.Track.Artists {
+			artistNames = append(artistNames, artist.Name)
+		}
 	} else {
 		name = playing.Episode.Name
 		duration = float64(playing.Track.DurationMs)
@@ -149,25 +170,52 @@ func updateMediaInfo(a *App) {
 
 	percent := progress/duration
 
-	pos := a.posMap["media"]
-	m, ok := a.grid.At(pos).(media.Model)
-
+	m, ok := GetModel[media.Model](a, "media")
 	if !ok {
 		return
 	}
-	m.SetArtist(name)
+	artistInfo := strings.Join(artistNames, "\n")
+	m.SetMediaInfo(name, artistInfo)
+	m.SetVolumePercent(volumePercent)
 	m.SetPercent(percent)
-	a.grid.SetModelPos(m, pos)
+	SetModel(a, m, "media")
 }
 
-func updateMediaDims(a *App) {
-	pos := a.posMap["media"]
-	m, ok := a.grid.At(pos).(media.Model)
+func updateModelDims(a *App) {
+	sideBar, _ := GetModel[nested.NestedList](a, "sidebar")
+	sideBar.SetWidth(a.width/6)
+	sideBar.SetHeight(a.height/3)
+	SetModel(a, sideBar, "sidebar")
+
+	media, _ := GetModel[media.Model](a, "media")
+	media.SetWidth(a.width)
+	SetModel(a, media, "media")
+
+	t, _ := GetModel[Table[Rower]](a, "table")
+	t.SetWidth(a.width/3)
+	t.SetHeight(a.height/3)
+	SetModel(a, t, "table")
+}
+
+func GetModel[T tea.Model](a *App, key string) (T, bool) {
+	var zero T
+	pos := a.posMap[key]
+
+	m, ok := a.grid.At(pos).(T)
+
+	if !ok {
+		return zero, false
+	}
+
+	return m, ok
+}
+
+func SetModel[T tea.Model](a *App, model T, key string) {
+	pos, ok := a.posMap[key]
 	if !ok {
 		return
 	}
-	m.SetWidth(a.width)
-	a.grid.SetModelPos(m, pos)
+	a.grid.SetModelPos(model, pos)
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -181,9 +229,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.height = msg.Height
 		a.width = msg.Width
-		updateMediaDims(a)
+		updateModelDims(a)
 	case tea.KeyMsg:
-		switch msg.String() {
+		switch key := msg.String(); key {
 		case "ctrl+c":
 			return a, ShutDownApp(a)
 		case "esc":
@@ -192,6 +240,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			return a, tea.Quit
+		case "up", "down":
+			//push(updatePlaybackVolume(a, key))
 		case "q":
 			return a, tea.Quit
 		case "p":
@@ -202,11 +252,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			push(updateSkipPrev(a))
 		case "a":
 			push(handleAddItem(a))
+		case "c":
+			pos := a.grid.Cursor()
+			switch m := a.grid.At(pos).(type) {
+			case nested.NestedList:
+				item := m.SelectedItem()
+				idx := m.Index()
+				item.Collapse()
+				m.SetItem(item, idx)
+				
+				a.grid.SetModelPos(m, pos)
+			}
+			
 		case "enter":
 			if !a.grid.Focus() {
 				pos := a.grid.Cursor()
 				switch a.grid.At(pos).(type) {
-				case List, media.Model:
+				case List, media.Model, Table[Rower], nested.NestedList:
 					a.grid.SetFocus(true)
 				}
 			} else {
@@ -216,15 +278,49 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					push(handleSelection(a))
 				case media.Model:
 					push(updateMediaControlSelection(a, m, pos))
+				case nested.NestedList:
+					item := m.SelectedItem()
+					idx := m.Index()
+					if item.Expandable() && !item.Expanded() {
+						item.Expand()
+						m.SetItem(item, idx)
+						break
+					}
+
+					if item.Expanded() {
+						push(handleSidebarSelection(a, m))
+					}
 				}
 			}
 		}
 	}
-
 	a.grid, cmd = a.grid.Update(msg)
 	push(cmd)
-
 	return a, b.Cmd()
+}
+
+func updatePlaybackVolume(a *App, dir string) tea.Cmd {
+	percent, valid := a.ActiveDeviceVolumePercent()
+
+	if !valid {
+		return nil
+	}
+	switch dir {
+	case "up":
+		percent += 5
+		if percent > 100 {
+			percent = 100
+		}
+	case "down":
+		percent -= 5
+		if percent < 0 {
+			percent = 0
+		}
+	}
+
+	a.msgs = append(a.msgs, "changing volume to " + fmt.Sprintf("%d", percent))
+
+	return SetPlaybackVolumeCmd(a, percent)
 }
 
 func updateMediaControlSelection(a *App, m media.Model, pos grid.Position) tea.Cmd {
@@ -301,14 +397,62 @@ func handleSelection(a *App) tea.Cmd {
 	return nil
 }
 
+func handleSidebarSelection(a *App, m nested.NestedList) tea.Cmd {
+	title, item := m.Pair()
+
+	if item == nil {
+		return nil
+	}
+
+	switch title {
+	case "Top Artists":
+	case "Top Tracks":
+	case "Playlists":
+		playlist, ok := item.(types.SimplifiedPlaylistObject)
+
+		if !ok {
+			return nil
+		}
+
+		items, ok := a.data[playlist.Id]
+
+		if !ok {
+			return GetPlaylistItemsCmd(a, playlist.Id)
+		}
+
+		vals, ok := items.([]types.PlaylistItemUnion)
+
+		if !ok {
+			return nil
+		}
+
+		SetTable(a, vals)
+	}
+
+	return nil
+}
+
+func SetTable[S []T, T Rower](a *App, s S) {
+	t, ok := GetModel[Table[Rower]](a, "table")
+	if !ok {
+		return
+	}
+	SetTableItems(&t, toRows(s))
+	t.t.Focus()
+	a.grid.SetFocus(true)
+	tablePos := a.posMap["table"]
+	a.grid.SetCursor(tablePos)
+	SetModel(a, t, "table")
+}
+
 func handleAddItem(a *App) tea.Cmd {
 	pos := a.grid.Cursor()
-	m, ok := a.grid.At(pos).(List)
+	m, ok := a.grid.At(pos).(Table[Rower])
 	if !ok {
 		return nil
 	}
 
-	selectedItem := m.l.SelectedItem()
+	selectedItem := m.SelectedItem()
 
 	var uri, msg string
 
@@ -327,11 +471,11 @@ func handleAddItem(a *App) tea.Cmd {
 	}
 
 	if msg != "" {
-		a.msgs = append(a.msgs, msg)
+		a.AppendMessage(msg)
 	}
 
 	if uri == "" {
-		a.msgs = append(a.msgs, "uri of the selected item is empty")
+		a.AppendMessage("uri of the selected item is empty")
 		return nil
 	}
 
@@ -348,11 +492,11 @@ func handlePlaylistSelection(a *App, item list.Item) tea.Cmd {
 	playlistId := selectedItem.Id
 
 	if playlistId == "" {
-		a.msgs = append(a.msgs, "playlist id is empty")
+		a.AppendMessage("playlist id is empty")
 		return nil
 	}
 
-	a.msgs = append(a.msgs, "playlistId: " + playlistId)
+	a.AppendMessage("playlistId: " + playlistId)
 
 	return GetPlaylistItemsCmd(a, playlistId)
 }
@@ -368,6 +512,7 @@ func (a *App) viewActiveDevice() string {
 
 	s += fmt.Sprintf("name: %s\n", device.Name)
 	s += fmt.Sprintf("id: %s\n", device.Id.Value)
+	s += fmt.Sprintf("volume: %d\n", device.VolumePercent.Value)
 
 	return a.styles.currentlyPlaying.Width(20).Render(s)
 }
@@ -375,31 +520,11 @@ func (a *App) viewActiveDevice() string {
 func (a *App) View() string {
 	builder := &strings.Builder{}
 
-	titleView :=  a.styles.title.Render(a.title) 
-
-	titleView = lipgloss.Place(a.width, 1, lipgloss.Center, lipgloss.Center, titleView)
-
+	titleView :=  a.styles.title.Width(a.width-5).Align(lipgloss.Center).Render(a.title) 
+	//titleView = lipgloss.Place(a.width, 1, lipgloss.Center, lipgloss.Center, titleView)
 	builder.WriteString(titleView)
 	builder.WriteRune('\n')
-
-	msgsView := strings.Join(a.msgs, "\n")
-	gridView := a.grid.View()
-
-	activeDeviceView := a.viewActiveDevice()
-	row2 := lipgloss.JoinHorizontal(lipgloss.Left, activeDeviceView)
-
-	s := lipgloss.JoinVertical(lipgloss.Left, gridView, row2)
-	s = lipgloss.JoinVertical(lipgloss.Center, s, msgsView)
-
-	errView := ""
-
-	for _, err := range a.err {
-		errView += err.Error() + "\n"
-	}
-
-	s = lipgloss.JoinVertical(lipgloss.Center, s, errView)
-
-	builder.WriteString(s)
+	builder.WriteString(a.grid.View())
 
 	return builder.String()
 }

@@ -5,6 +5,7 @@ import (
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/lipgloss"
 	"time"
+	"fmt"
 )
 
 type Styles struct {
@@ -38,10 +39,12 @@ type Model struct {
 	width int
 	height int
 	playing bool
+	track string
 	artist string
 	buttons []string
 	idx int
 	progress progress.Model
+	volumePercent int
 	percent float64
 	buttonPressDur time.Duration
 	pressed map[int]bool
@@ -64,7 +67,7 @@ type clearPress struct{ idx int}
 
 func (m *Model) SetWidth(w int) {
 	m.width = w
-	m.progress.Width = w*7/10
+	m.progress.Width = w*6/10
 }
 
 func (m *Model) PressButton() tea.Cmd {
@@ -83,11 +86,20 @@ func (m *Model) SetProgress(p float64) {
 	m.progress.SetPercent(p)
 }
 
+func (m *Model) SetVolumePercent(p int) {
+	m.volumePercent = p
+}
+
 func (m *Model) SetPlaying(b bool) {
 	m.playing = b
 }
 
-func (m *Model) SetArtist(artist string) {
+func (m *Model) SetMediaInfo(trackName string, artistName string) {
+	m.track = trackName
+	m.artist = artistName
+}
+
+func (m *Model) SetArtist(artist string, track string) {
 	m.artist = artist
 }
 
@@ -159,7 +171,8 @@ func renderButton(m Model, i int, button string) string {
 }
 
 func (m Model) View() string {
-	artistView := m.styles.artistStyle.Render(m.artist)
+	artistView  := lipgloss.JoinVertical(lipgloss.Left, m.track, m.artist)
+	artistView = m.styles.artistStyle.Width(20).Render(artistView)
 
 	mediaButtons := make([]string, 0, 3)
 	volumeButtons := make([]string, 0, 2)
@@ -177,6 +190,9 @@ func (m Model) View() string {
 
 	mediaButtonsView = m.styles.buttonGroup.Render(mediaButtonsView)
 	volumeButtonsView = m.styles.buttonGroup.Render(volumeButtonsView)
+
+	volume := fmt.Sprintf("%d%%", m.volumePercent)
+	volumeButtonsView = lipgloss.JoinVertical(lipgloss.Center, volumeButtonsView, volume)
 
 	mediaView := lipgloss.JoinVertical(lipgloss.Center, mediaButtonsView, m.progress.ViewAs(m.percent))
 

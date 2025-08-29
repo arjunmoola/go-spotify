@@ -3,7 +3,7 @@ package app
 import (
 	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/bubbles/list"
+	//"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/progress"
 	"fmt"
 	"time"
@@ -17,7 +17,7 @@ import (
 	"go-spotify/client"
 	"go-spotify/models/grid"
 	"go-spotify/models/media"
-	//"go-spotify/models/list"
+	nested "go-spotify/models/list"
 	//"github.com/charmbracelet/bubbles/list"
 	_ "github.com/tursodatabase/go-libsql"
 	"errors"
@@ -207,7 +207,7 @@ func NewAppStyles() AppStyles {
 	progressBarStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder())
 
 	return AppStyles{
-		title: defaultStyle.Foreground(lipgloss.Color("200")),
+		title: defaultStyle.BorderStyle(lipgloss.RoundedBorder()).Height(1).Foreground(lipgloss.Color("200")),
 		artist: generalModelStyle,
 		track: generalModelStyle,
 		focusedModel: generalModelStyle.BorderForeground(lipgloss.Color("200")),
@@ -299,6 +299,8 @@ type App struct {
 	retrying bool
 	currentlyPlayingRetryCount int
 
+	data map[string]any
+
 	progress progress.Model
 	playbackState Optional[types.PlaybackState]
 	activeDevice Optional[types.Device]
@@ -369,14 +371,6 @@ func (a *App) IsPlaying() (isPlaying bool, valid bool) {
 
 func (a *App) SetUser(u types.User) {
 	a.user.user = u
-}
-
-func (a *App) SetTopTracks(tracks []types.Track) {
-	a.user.topTracks = tracks
-}
-
-func (a *App) SetTopArtists(artists []types.Artist) {
-	a.user.topArtists = artists
 }
 
 func (a *App) SetActiveDevice(device types.Device) {
@@ -490,6 +484,18 @@ func (a *App) SetExpiresAt(e time.Time) {
 	a.authInfo.expiresAt = e
 }
 
+func (a *App) AppendMessage(msg string) {
+	pos := a.posMap["messages"]
+	m, ok := a.grid.At(pos).(List)
+	if !ok {
+		return
+	}
+	items := m.l.Items()
+	items = append(items, messageItem(msg))
+	m.l.SetItems(items)
+	a.grid.SetModelPos(m, pos)
+}
+
 func New(clientId, clientSecret, redirectUri string) *App {
 	dir := getConfigDir()
 	dburl := getDbUrl(dir)
@@ -500,25 +506,25 @@ func New(clientId, clientSecret, redirectUri string) *App {
 		redirectUri: redirectUri,
 	}
 
-	artists := NewList(nil)
-	artists.SetShowTitle(true)
-	artists.SetTitle("Artists")
-	artists.SetListDimensions(10, 20)
+	//Artists := NewList(nil)
+	//Artists.SetShowTitle(true)
+	//Artists.SetTitle("Artists")
+	//Artists.SetListDimensions(10, 20)
 
-	tracks := NewList(nil)
-	tracks.SetShowTitle(true)
-	tracks.SetTitle("Tracks")
-	tracks.SetListDimensions(10, 20)
+	//Tracks := NewList(nil)
+	//Tracks.SetShowTitle(true)
+	//Tracks.SetTitle("Tracks")
+	//Tracks.SetListDimensions(10, 20)
 
-	playlists := NewList(nil)
-	playlists.SetShowTitle(true)
-	playlists.SetTitle("Playlists")
-	playlists.SetListDimensions(10, 20)
+	//Playlists := NewList(nil)
+	//Playlists.SetShowTitle(true)
+	//Playlists.SetTitle("Playlists")
+	//Playlists.SetListDimensions(10, 20)
 
-	playlistItems := NewList(nil)
-	playlistItems.SetShowTitle(true)
-	playlistItems.SetTitle("Items")
-	playlistItems.SetListDimensions(10, 20)
+	//PlaylistItems := NewList(nil)
+	//PlaylistItems.SetShowTitle(true)
+	//PlaylistItems.SetTitle("Items")
+	//PlaylistItems.SetListDimensions(10, 20)
 
 	devices := NewList(nil)
 	devices.SetShowTitle(true)
@@ -530,26 +536,29 @@ func New(clientId, clientSecret, redirectUri string) *App {
 	queue.SetTitle("Queue")
 	queue.SetListDimensions(10, 20)
 
-	sidebar := NewList(nil)
-	sidebar.SetListDimensions(10, 20)
+	messages := NewList(nil)
+	messages.SetListDimensions(10, 30)
+	messages.SetShowTitle(true)
+	messages.SetTitle("Internal Messages")
 
-	items := []list.Item{
-		sidebarItem("Top Artists"),
-		sidebarItem("Top Tracks"),
-		sidebarItem("Playlists"),
+	items := []nested.Item{
+		nested.NewItem("Top Artists", nil, true),
+		nested.NewItem("Top Tracks", nil, true),
+		nested.NewItem("Playlists", nil, true),
 	}
 
-	sidebar.SetItems(items)
+	sidebar := nested.New(items)
 
-	row := grid.NewRow(artists, tracks, playlists, playlistItems, devices, queue)
+	table := NewTable[Rower]()
+
+	//row := grid.NewRow(artists, tracks, playlists, playlistItems, devices, queue)
 	media := media.New("prev", "play", "next", "up", "down")
-	row2 := grid.NewRow(sidebar)
-	row3 := grid.NewRow(media)
+	row2 := grid.NewRow(sidebar, table, queue)
+	row3 := grid.NewRow(messages, devices)
+	row4 := grid.NewRow(media)
 
 	g := grid.New()
-	g.Append(row)
-	g.Append(row2)
-	g.Append(row3)
+	g.Append(row2, row3, row4)
 	//g.SetModel(artists, 0, 0)
 	//g.SetModel(tracks, 0, 1)
 	//g.SetModel(playlists, 0, 2)
@@ -559,14 +568,16 @@ func New(clientId, clientSecret, redirectUri string) *App {
 	//grid.SetCellDimensions(20, 30)
 
 	posMap := make(map[string]grid.Position)
-	posMap["artists"] = grid.Pos(0, 0)
-	posMap["tracks"] = grid.Pos(0, 1)
-	posMap["playlists"] = grid.Pos(0, 2)
-	posMap["playlist_items"] = grid.Pos(0, 3)
-	posMap["devices"] = grid.Pos(0, 4)
-	posMap["queue"] = grid.Pos(0, 5)
-	posMap["sidebar"] = grid.Pos(1, 0)
+	//posMap["artists"] = grid.Pos(0, 0)
+	//posMap["tracks"] = grid.Pos(0, 1)
+	//posMap["playlists"] = grid.Pos(0, 2)
+	//posMap["playlist_items"] = grid.Pos(0, 3)
+	posMap["devices"] = grid.Pos(1, 1)
+	posMap["queue"] = grid.Pos(0, 2)
+	posMap["sidebar"] = grid.Pos(0, 0)
+	posMap["messages"] = grid.Pos(1, 0)
 	posMap["media"] = grid.Pos(2, 0)
+	posMap["table"] = grid.Pos(0, 1)
 
 	typeMap := make(map[grid.Position]string)
 
@@ -584,13 +595,14 @@ func New(clientId, clientSecret, redirectUri string) *App {
 		title: "Go-Spotify",
 		posMap: posMap,
 		typeMap: typeMap,
-		artists: artists,
-		tracks: tracks,
-		playlists: playlists,
-		devices: devices,
+		//artists: artists,
+		//tracks: tracks,
+		//playlists: playlists,
+		//devices: devices,
 		grid: g,
 		styles: NewAppStyles(),
 		progress: progress,
+		data: make(map[string]any),
 	}
 }
 
@@ -677,6 +689,7 @@ type GetUsersQueueResult struct {
 }
 
 type GetPlaylistItemsResult struct {
+	id string
 	result types.Page[types.PlaylistItemUnion]
 }
 
@@ -691,6 +704,7 @@ type RenewRefreshTokenResult struct {
 type AddItemToQueueResult struct{}
 type SkipItemResult struct{}
 type UpdatePlaybackResult struct{}
+type SetPlaybackVolumeResult struct{}
 
 type Shutdown struct{}
 
@@ -939,6 +953,7 @@ func GetPlaylistItemsCmd(a *App, playlistId string) tea.Cmd {
 
 		return GetPlaylistItemsResult {
 			result: items,
+			id: playlistId,
 		}
 	}
 }
@@ -959,6 +974,24 @@ func AddItemToQueueCmd(a *App, uri string) tea.Cmd {
 		}
 
 		return AddItemToQueueResult{}
+	}
+}
+
+func SetPlaybackVolumeCmd(a *App, percent int) tea.Cmd {
+	return func() tea.Msg {
+		ctx := client.WithAccessToken(context.Background(), a.AccessToken())
+		
+		deviceId, valid := a.ActiveDeviceId()
+
+		if !valid {
+			return AppErr(fmt.Errorf("active device is not set up"))
+		}
+
+		if err := a.client.SetPlaybackVolume(ctx, deviceId, percent); err != nil {
+			return AppErr(err)
+		}
+
+		return SetPlaybackVolumeResult{}
 	}
 }
 
