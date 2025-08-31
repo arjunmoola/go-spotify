@@ -196,6 +196,8 @@ type AppStyles struct {
 	artistStyle lipgloss.Style
 	skipButtonStyle lipgloss.Style
 	progressBarStyle lipgloss.Style
+	gridStyle lipgloss.Style
+	infoStyle lipgloss.Style
 }
 
 func NewAppStyles() AppStyles {
@@ -205,9 +207,11 @@ func NewAppStyles() AppStyles {
 	artistStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder())
 	skipButtonsStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder())
 	progressBarStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder())
+	gridStyle := lipgloss.NewStyle().Align(lipgloss.Center)
 
 	return AppStyles{
-		title: defaultStyle.BorderStyle(lipgloss.RoundedBorder()).Height(1).Foreground(lipgloss.Color("200")),
+		infoStyle: defaultStyle.Align(lipgloss.Center),
+		title: defaultStyle.BorderStyle(lipgloss.HiddenBorder()).Height(1).Foreground(lipgloss.Color("200")),
 		artist: generalModelStyle,
 		track: generalModelStyle,
 		focusedModel: generalModelStyle.BorderForeground(lipgloss.Color("200")),
@@ -215,6 +219,7 @@ func NewAppStyles() AppStyles {
 		artistStyle: artistStyle,
 		skipButtonStyle: skipButtonsStyle,
 		progressBarStyle: progressBarStyle,
+		gridStyle: gridStyle,
 	}
 }
 
@@ -286,12 +291,9 @@ type App struct {
 	media media.Model
 
 	title string
-	artists List
-	tracks List
-	devices List
-	playlists List
 	width int
 	height int
+
 	foundCurrentlyPlaying bool
 	msgs []string
 	styles AppStyles
@@ -506,26 +508,6 @@ func New(clientId, clientSecret, redirectUri string) *App {
 		redirectUri: redirectUri,
 	}
 
-	//Artists := NewList(nil)
-	//Artists.SetShowTitle(true)
-	//Artists.SetTitle("Artists")
-	//Artists.SetListDimensions(10, 20)
-
-	//Tracks := NewList(nil)
-	//Tracks.SetShowTitle(true)
-	//Tracks.SetTitle("Tracks")
-	//Tracks.SetListDimensions(10, 20)
-
-	//Playlists := NewList(nil)
-	//Playlists.SetShowTitle(true)
-	//Playlists.SetTitle("Playlists")
-	//Playlists.SetListDimensions(10, 20)
-
-	//PlaylistItems := NewList(nil)
-	//PlaylistItems.SetShowTitle(true)
-	//PlaylistItems.SetTitle("Items")
-	//PlaylistItems.SetListDimensions(10, 20)
-
 	devices := NewList(nil)
 	devices.SetShowTitle(true)
 	devices.SetTitle("Devices")
@@ -543,8 +525,9 @@ func New(clientId, clientSecret, redirectUri string) *App {
 
 	items := []nested.Item{
 		nested.NewItem("Top Artists", nil, true),
-		nested.NewItem("Top Tracks", nil, true),
+		nested.NewItem("Top Tracks", nil, false),
 		nested.NewItem("Playlists", nil, true),
+		nested.NewItem("Recently Played", nil, false),
 	}
 
 	sidebar := nested.New(items)
@@ -559,19 +542,9 @@ func New(clientId, clientSecret, redirectUri string) *App {
 
 	g := grid.New()
 	g.Append(row2, row3, row4)
-	//g.SetModel(artists, 0, 0)
-	//g.SetModel(tracks, 0, 1)
-	//g.SetModel(playlists, 0, 2)
-	//g.SetModel(playlistItems, 0, 3)
-	//g.SetModel(devices, 0, 4)
-	//g.SetModel(queue, 0, 5)
-	//grid.SetCellDimensions(20, 30)
+	g.SetReadonly(2)
 
 	posMap := make(map[string]grid.Position)
-	//posMap["artists"] = grid.Pos(0, 0)
-	//posMap["tracks"] = grid.Pos(0, 1)
-	//posMap["playlists"] = grid.Pos(0, 2)
-	//posMap["playlist_items"] = grid.Pos(0, 3)
 	posMap["devices"] = grid.Pos(1, 1)
 	posMap["queue"] = grid.Pos(0, 2)
 	posMap["sidebar"] = grid.Pos(0, 0)

@@ -161,6 +161,14 @@ type List struct {
 	focus bool
 }
 
+func (l *List) SetWidth(w int) {
+	l.l.SetWidth(w)
+}
+
+func (l *List) SetHeight(h int) {
+	l.l.SetHeight(h)
+}
+
 func (l List) FilterValue() string {
 	return ""
 }
@@ -265,10 +273,10 @@ type Table[T Rower] struct {
 func NewTable[T Rower]() Table[T] {
 	t := table.New()
 	columns := []table.Column{
-		{ Title: "Name", Width: 30 },
-		{ Title: "Artist", Width: 30 },
-		{ Title: "Album", Width: 20 },
-		{ Title: "Duration", Width: 20 },
+		{ Title: "Name", Width: 40 },
+		{ Title: "Artist", Width: 40 },
+		{ Title: "Album", Width: 30 },
+		{ Title: "Duration", Width: 30 },
 	}
 	t.SetColumns(columns)
 	return Table[T] {
@@ -316,6 +324,39 @@ func (t *Table[T]) setRows(items []T) {
 
 func (t *Table[T]) SetWidth(w int) {
 	t.t.SetWidth(w)
+	w = t.t.Width()
+
+	cols := t.t.Columns()
+	c := make([]table.Column, 0, len(cols))
+
+	for _, col := range cols {
+		var column table.Column
+		switch title := col.Title; title {
+		case "Name":
+			column.Width = int(0.30*float64(w))
+			column.Title = title
+		case "Artist":
+			column.Width = int(0.30*float64(w))
+			column.Title = title
+		case "Album":
+			column.Width = int(0.20*float64(w))
+			column.Title = title
+		case "Duration":
+			column.Width = int(0.20*float64(w))
+			column.Title = title
+		}
+		c = append(c, column)
+	}
+
+	t.SetColumns(c)
+}
+
+func (t *Table[T]) SetColumns(cols []table.Column) {
+	t.t.SetColumns(cols)
+}
+
+func (t *Table[T]) Columns() []table.Column {
+	return t.t.Columns()
 }
 
 func (t *Table[T]) SetHeight(h int) {

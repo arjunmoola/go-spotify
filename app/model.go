@@ -75,7 +75,7 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 		SetSideBarItems(a, "Top Artists", msg.result.Items)
 	case GetUsersTopItems[types.Track]:
 		a.data["top_tracks"] = msg.result.Items
-		SetSideBarItems(a, "Top Tracks", msg.result.Items)
+		//SetSideBarItems(a, "Top Tracks", msg.result.Items)
 	case GetUsersPlaylistsResult:
 		a.data["playlists"] = msg.result.Items
 		SetSideBarItems(a, "Playlists", msg.result.Items)
@@ -142,6 +142,48 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, b.Cmd()
 }
 
+func (a *App) currentlyPlayingArtistView() string {
+	var name string
+	var artistNames []string
+
+	if !a.CurrentlyPlayingIsValid() {
+		return ""
+	}
+
+	playing := a.CurrentlyPlayingItem()
+
+	if playing.Type == "track" {
+		name = playing.Track.Name
+		for _, artist := range playing.Track.Artists {
+			artistNames = append(artistNames, artist.Name)
+		}
+	} else {
+		name = playing.Episode.Name
+	}
+
+	blockStyle := lipgloss.NewStyle().Align(lipgloss.Left)
+
+	artistView := lipgloss.JoinVertical(lipgloss.Left, name, strings.Join(artistNames, ","))
+
+	s := lipgloss.JoinHorizontal(lipgloss.Top, "Now Playing: ", artistView)
+
+	isPlaying, _ := a.IsPlaying()
+
+	if isPlaying {
+		s = lipgloss.JoinHorizontal(lipgloss.Top, s, "\t", "playing")
+
+	} else {
+		s = lipgloss.JoinHorizontal(lipgloss.Top, s, "\t", "paused")
+	}
+
+	device, _ := a.ActiveDeviceName()
+
+	s = lipgloss.JoinHorizontal(lipgloss.Top, s, "\t", "Device:" + device)
+
+	return blockStyle.Render(s)
+}
+
+
 func updateMediaInfo(a *App) {
 	if !a.CurrentlyPlayingIsValid() {
 		return
@@ -183,18 +225,23 @@ func updateMediaInfo(a *App) {
 
 func updateModelDims(a *App) {
 	sideBar, _ := GetModel[nested.NestedList](a, "sidebar")
-	sideBar.SetWidth(a.width/6)
+	sideBar.SetWidth(int(float64(a.width)*0.2))
 	sideBar.SetHeight(a.height/3)
 	SetModel(a, sideBar, "sidebar")
+
+	t, _ := GetModel[Table[Rower]](a, "table")
+	t.SetWidth(int(float64(a.width)*0.6))
+	t.SetHeight(a.height/3)
+	SetModel(a, t, "table")
+
+	q, _ := GetModel[List](a, "queue")
+	q.SetWidth(int(float64(a.width)*0.2))
+	q.SetHeight(a.height/3)
+	SetModel(a, q, "queue")
 
 	media, _ := GetModel[media.Model](a, "media")
 	media.SetWidth(a.width)
 	SetModel(a, media, "media")
-
-	t, _ := GetModel[Table[Rower]](a, "table")
-	t.SetWidth(a.width/3)
-	t.SetHeight(a.height/3)
-	SetModel(a, t, "table")
 }
 
 func GetModel[T tea.Model](a *App, key string) (T, bool) {
@@ -285,6 +332,19 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						item.Expand()
 						m.SetItem(item, idx)
 						break
+					}
+
+					if !item.Expandable() {
+						title := item.Title()
+
+						switch title {
+						case "Top Tracks":
+							items, ok := a.data["top_tracks"].([]types.Track)
+							if !ok {
+								break
+							}
+							SetTable(a, items)
+						}
 					}
 
 					if item.Expanded() {
@@ -407,6 +467,15 @@ func handleSidebarSelection(a *App, m nested.NestedList) tea.Cmd {
 	switch title {
 	case "Top Artists":
 	case "Top Tracks":
+		items, ok := a.data["top_tracks"]
+		if !ok {
+			return nil
+		}
+		vals, ok := items.([]types.Track)
+		if !ok {
+			return nil
+		}
+		SetTable(a, vals)
 	case "Playlists":
 		playlist, ok := item.(types.SimplifiedPlaylistObject)
 
@@ -518,13 +587,12 @@ func (a *App) viewActiveDevice() string {
 }
 
 func (a *App) View() string {
-	builder := &strings.Builder{}
-
-	titleView :=  a.styles.title.Width(a.width-5).Align(lipgloss.Center).Render(a.title) 
+	//builder := &strings.Builder{}
+	titleView :=  a.styles.title.Width(a.width).Align(lipgloss.Center).Render(a.title)
+	infoView := a.styles.infoStyle.Width(a.width).Render(a.currentlyPlayingArtistView())
+	gridView := a.styles.gridStyle.Render(a.grid.View())
 	//titleView = lipgloss.Place(a.width, 1, lipgloss.Center, lipgloss.Center, titleView)
-	builder.WriteString(titleView)
-	builder.WriteRune('\n')
-	builder.WriteString(a.grid.View())
-
-	return builder.String()
+	s := lipgloss.JoinVertical(lipgloss.Center, titleView, infoView)
+	s = lipgloss.JoinVertical(lipgloss.Left, s, gridView)
+	return s
 }

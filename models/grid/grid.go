@@ -21,7 +21,44 @@ func (e EmptyCell) View() string {
 	return ""
 }
 
+type Cell struct {
+	model tea.Model
+	height int
+	width int
+}
 
+type GridRow struct {
+	Cells []Cell
+	height int
+	width int
+}
+
+func NewCell(model tea.Model) Cell {
+	return Cell{
+		model: model,
+	}
+}
+
+func (c *Cell) SetHeight(h int) {
+	c.height = h
+}
+
+func NewGridRow(cells ...Cell) GridRow {
+	return GridRow {
+		Cells: cells,
+	}
+}
+
+func (row *GridRow) Append(cell Cell) {
+	row.Cells = append(row.Cells, cell)
+}
+
+func (row *GridRow) SetHeight(h int) {
+	row.height = h
+	for _, cell := range row.Cells {
+		cell.SetHeight(h)
+	}
+}
 
 type Styles struct {
 	Cell lipgloss.Style
@@ -29,21 +66,31 @@ type Styles struct {
 	Focus lipgloss.Style
 	model lipgloss.Style
 	row lipgloss.Style
+	progress lipgloss.Style
+	readOnly lipgloss.Style
+	header lipgloss.Style
+	defaultStyle lipgloss.Style
 }
 
 func DefaultStyle() Styles {
-	cellStyle := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder())
-	currentCell := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("200"))
+	header := lipgloss.NewStyle().BorderStyle(lipgloss.HiddenBorder())
+	cellStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder())
+	currentCell := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("200"))
 	focusStyle := currentCell.BorderStyle(lipgloss.DoubleBorder())
-
+	progressStyle := lipgloss.NewStyle().BorderStyle(lipgloss.HiddenBorder())
 	return Styles{
+		defaultStyle: lipgloss.NewStyle().BorderStyle(lipgloss.HiddenBorder()),
+		header: header,
 		Cell: cellStyle,
 		CurrentCell: currentCell,
 		Focus: focusStyle,
 		model: lipgloss.NewStyle().BorderStyle(lipgloss.HiddenBorder()).Align(lipgloss.Center),
 		row: lipgloss.NewStyle(),
+		progress: progressStyle,
 	}
 }
+
+type RenderCell func(s ...string) string
 
 type Model struct {
 	rows int
@@ -57,6 +104,9 @@ type Model struct {
 	pos Position
 	focus bool
 	Styles Styles
+
+	cellRenderer map[Position] RenderCell
+	readOnly map[int]bool
 }
 
 func New() Model {
@@ -65,8 +115,38 @@ func New() Model {
 		cellHeight: 10,
 		cursor: 0,
 		Styles: DefaultStyle(),
+		cellRenderer: make(map[Position] RenderCell),
+		readOnly: make(map[int]bool),
 	}
 }
+
+func (m *Model) SetReadonly(i int) {
+	m.readOnly[i] = true
+}
+
+func (m *Model) RegisterRenderer(pos Position, r RenderCell) {
+	m.cellRenderer[pos] = r
+}
+
+func (m *Model) GetRenderer(pos Position) RenderCell {
+	var renderer RenderCell
+
+	renderer, ok := m.cellRenderer[pos]
+
+	if !ok {
+		if m.IsCursor(pos) {
+			renderer = m.Styles.CurrentCell.Render
+		} else {
+			renderer = m.Styles.Cell.Render
+		}
+
+		return renderer
+	}
+
+	return nil
+
+}
+
 
 func (m *Model) SetHeight(h int) {
 	m.height = h
@@ -165,6 +245,10 @@ type Position struct {
 	Row, Col int
 }
 
+func (m Model) IsCursor(pos Position) bool {
+	return pos == m.Cursor()
+}
+
 func Pos(i, j int) Position {
 	return Position{ i, j }
 }
@@ -195,6 +279,19 @@ func (m *Model) updateCursor(dir string) {
 
 	if newI < 0 || newI >= len(m.models) {
 		newI = i
+	}
+
+	for m.readOnly[newI] {
+		switch dir {
+		case "j":
+			newI++
+		case "k":
+			newI--
+		}
+		if newI < 0 || newI >= len(m.models) {
+			newI = i
+			break
+		}
 	}
 
 	if newJ < 0 || newJ >= len(m.models[newI]) {
@@ -256,12 +353,31 @@ func (m Model) viewRow(i int) string {
 	return lipgloss.JoinHorizontal(lipgloss.Left, views...)
 }
 
+func (m Model) viewReadonlyRow(i int) string {
+	row := m.models[i]
+
+	views := make([]string, 0, len(row))
+
+	for _, model := range row {
+		views = append(views, model.View())
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Left, views...)
+}
+
 func (m Model) renderedRows() iter.Seq[string] {
 	return func(yield func(string) bool) {
 		for i := range m.models {
-			s := m.viewRow(i)
-			if !yield(s) {
-				return
+			if m.readOnly[i] {
+				s := m.viewReadonlyRow(i)
+				if !yield(s) {
+					return
+				}
+			} else {
+				s := m.viewRow(i)
+				if !yield(s) {
+					return
+				}
 			}
 		}
 	}

@@ -129,6 +129,10 @@ func (i Item) Expanded() bool {
 	return i.expanded
 }
 
+func (i Item) Title() string {
+	return i.title
+}
+
 func (i Item) Expandable() bool {
 	return i.expandable
 }
