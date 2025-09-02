@@ -1,6 +1,8 @@
 package app
 
 import (
+	"strings"
+	"flag"
 	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
 	//"github.com/charmbracelet/bubbles/list"
@@ -260,17 +262,11 @@ type TrackInfo struct {
 	trackType string
 }
 
-type UserInfo struct {
-	user types.User
-	topTracks []types.Track
-	topArtists []types.Artist
-}
-
 type App struct {
 	mediaFocus bool
 	client *client.Client
 	authInfo AuthorizationInfo
-	user UserInfo
+	user Optional[types.User]
 
 	tokenExpired bool
 
@@ -287,6 +283,10 @@ type App struct {
 	grid grid.Model
 	posMap map[string]grid.Position
 	typeMap map[grid.Position]string
+	viewMap map[string]Table[Rower]
+	viewMapKeys map[string]string
+
+	cachedPlaylists map[string]types.Playlist
 
 	media media.Model
 
@@ -308,11 +308,101 @@ type App struct {
 	activeDevice Optional[types.Device]
 	currentlyPlaying Optional[types.CurrentlyPlaying]
 	info SpotifyInfo
+
+	sessionStart time.Time
+
+	defaultPlaylist Optional[types.Playlist]
 }
 
 type Optional[T any] struct {
 	Value T
 	Valid bool
+}
+
+func (a *App) IsPlaylistInCache(id string) bool {
+	_, ok := a.cachedPlaylists[id]
+	return ok
+}
+
+func (a *App) AddPlaylistToCache(playlist types.Playlist) {
+	id := playlist.Id
+	a.cachedPlaylists[id] = playlist
+}
+
+func (a *App) GetPlaylistFromCache(id string) (types.Playlist, bool) {
+	playlist, ok := a.cachedPlaylists[id]
+	return playlist, ok
+}
+
+func (a *App) RemovePlaylistFromCache(id string) {
+	_, ok := a.cachedPlaylists[id]
+	if !ok {
+		return
+	}
+
+	delete(a.cachedPlaylists, id)
+}
+
+func (a *App) SetUser(u types.User) {
+	a.user = Optional[types.User]{
+		Value: u,
+		Valid: true,
+	}
+}
+
+func (a *App) UserIsValid() bool {
+	return a.user.Valid
+}
+
+func (a *App) UserDisplayName() string {
+	return a.user.Value.DisplayName
+}
+
+func (a *App) UserId() string {
+	return a.user.Value.Id
+}
+
+func (a *App) SetDefaultPlaylist(p types.Playlist) {
+	a.defaultPlaylist = Optional[types.Playlist]{
+		Value: p,
+		Valid: true,
+	}
+}
+
+func (a *App) DefaultPlaylistIsValid() bool {
+	return a.defaultPlaylist.Valid
+}
+
+func (a *App) UnsetDefaultPlaylist() {
+	a.defaultPlaylist = Optional[types.Playlist]{}
+}
+
+func (a *App) DefaultPlaylistId() string {
+	return a.defaultPlaylist.Value.Id
+}
+
+func (a *App) DefaultPlaylistName() string {
+	return a.defaultPlaylist.Value.Name
+}
+
+func (a *App) ExistsInDefaultPlaylist(trackId string) bool {
+	tracks := a.defaultPlaylist.Value.Tracks
+
+	for _, track := range tracks.Items {
+		var id string
+		switch t := track.Track.Type; t {
+		case "track":
+			id = track.Track.Track.Id
+		case "episode":
+			id = track.Track.Episode.Id
+		}
+
+		if id == trackId {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (a *App) SetPlaybackState(p types.PlaybackState) {
@@ -369,10 +459,6 @@ func (a *App) IsPlaying() (isPlaying bool, valid bool) {
 	}
 	playing := a.currentlyPlaying.Value
 	return playing.IsPlaying, true
-}
-
-func (a *App) SetUser(u types.User) {
-	a.user.user = u
 }
 
 func (a *App) SetActiveDevice(device types.Device) {
@@ -528,15 +614,30 @@ func New(clientId, clientSecret, redirectUri string) *App {
 		nested.NewItem("Top Tracks", nil, false),
 		nested.NewItem("Playlists", nil, true),
 		nested.NewItem("Recently Played", nil, false),
+		//nested.NewItem("Current Session", nil, false),
 	}
 
 	sidebar := nested.New(items)
 
-	table := NewTable[Rower]()
+	table1 := NewTable[Rower](defaultColumns())
+	table2 := NewTable[Rower](playHistoryColumns())
+
+	viewMap := make(map[string]Table[Rower])
+
+	viewMap["default"] = table1
+	viewMap["recently_played"] = table2
+
+	viewMapKeys := make(map[string]string)
+	viewMapKeys["Top Artists"] = "default"
+	viewMapKeys["Top Tracks"] = "default"
+	viewMapKeys["Playlists"] = "default"
+	viewMapKeys["Recently Played"] = "recently_played"
+	//viewMapKeys["Current Session"] = "recently_played"
+	viewMapKeys["Playlist Items"] = "default"
 
 	//row := grid.NewRow(artists, tracks, playlists, playlistItems, devices, queue)
 	media := media.New("prev", "play", "next", "up", "down")
-	row2 := grid.NewRow(sidebar, table, queue)
+	row2 := grid.NewRow(sidebar, table1, queue)
 	row3 := grid.NewRow(messages, devices)
 	row4 := grid.NewRow(media)
 
@@ -568,6 +669,8 @@ func New(clientId, clientSecret, redirectUri string) *App {
 		title: "Go-Spotify",
 		posMap: posMap,
 		typeMap: typeMap,
+		viewMap: viewMap,
+		viewMapKeys: viewMapKeys,
 		//artists: artists,
 		//tracks: tracks,
 		//playlists: playlists,
@@ -576,6 +679,8 @@ func New(clientId, clientSecret, redirectUri string) *App {
 		styles: NewAppStyles(),
 		progress: progress,
 		data: make(map[string]any),
+		sessionStart: time.Now(),
+		cachedPlaylists: make(map[string]types.Playlist),
 	}
 }
 
@@ -663,7 +768,22 @@ type GetUsersQueueResult struct {
 
 type GetPlaylistItemsResult struct {
 	id string
+	name string
 	result types.Page[types.PlaylistItemUnion]
+}
+
+type GetPlaylistResult struct {
+	id string
+	name string
+	result types.Playlist
+}
+
+type GetUsersRecentlyPlayedResult struct {
+	result types.Page[types.PlayHistory]
+}
+
+type GetUsersCurrentSessionResult struct {
+	result types.Page[types.PlayHistory]
 }
 
 type GetCurrentlyPlayingEpisodeResult struct {}
@@ -671,7 +791,13 @@ type GetCurrentlyPlayingEpisodeResult struct {}
 type UpdateConfigResult struct {}
 
 type RenewRefreshTokenResult struct {
-	result *client.SpotifyRefreshTokenResponse
+	result types.SpotifyRefreshTokenResponse
+}
+
+type AddItemsToPlaylistResult struct {
+	result types.PlaylistSnapshot
+	id string
+	name string
 }
 
 type AddItemToQueueResult struct{}
@@ -705,12 +831,13 @@ func UpdateConfig(a *App, auth AuthorizationInfo) tea.Cmd {
 func RenewRefreshTokenTick(a *App, auth AuthorizationInfo) tea.Cmd {
 	d := time.Until(auth.expiresAt).Seconds()
 	return tea.Tick(time.Duration(d)*time.Second, func(_ time.Time) tea.Msg {
-		return renewRefreshToken(a, auth)
+		return renewRefreshToken(a)
 	})
 }
 
-func renewRefreshToken(a *App, auth AuthorizationInfo) tea.Msg {
-	resp, err := a.client.RefreshToken(auth.accessToken, auth.refreshToken, auth.clientId)
+func renewRefreshToken(a *App) tea.Msg {
+	ctx := defaultRefreshTokenCtx(a)
+	resp, err := a.client.RefreshToken(ctx)
 
 	if err != nil {
 		return AppErr(err)
@@ -723,7 +850,9 @@ func renewRefreshToken(a *App, auth AuthorizationInfo) tea.Msg {
 
 func GetUserProfile(a *App) tea.Cmd {
 	return func() tea.Msg {
-		profile, err := a.client.GetCurrentUserProfile(a.AccessToken())
+		ctx := defaultAccessTokenCtx(a)
+
+		profile, err := a.client.GetCurrentUserProfile(ctx)
 
 		if err != nil {
 			return AppErr(err)
@@ -735,11 +864,9 @@ func GetUserProfile(a *App) tea.Cmd {
 
 func GetUsersTopArtists(a *App) tea.Cmd {
 	return func() tea.Msg {
-		if a.AccessToken() == "" {
-			return AppErr(fmt.Errorf("access token is empty in GetUsersTopArtists"))
-		}
+		ctx := defaultAccessTokenCtx(a)
 
-		artists, err := client.GetUsersTopItems[types.Artist](a.client, a.AccessToken(), "artists")
+		artists, err := client.GetUsersTopItems[types.Artist](ctx, a.client, "artists")
 
 		if err != nil{
 			return AppErr(err)
@@ -751,11 +878,9 @@ func GetUsersTopArtists(a *App) tea.Cmd {
 
 func GetUsersTopTracks(a *App) tea.Cmd {
 	return func() tea.Msg {
-		if a.AccessToken() == "" {
-			return AppErr(fmt.Errorf("access token in empty in GetUsersTopTracks"))
-		}
+		ctx := defaultAccessTokenCtx(a)
 
-		tracks ,err := client.GetUsersTopItems[types.Track](a.client, a.AccessToken(), "tracks")
+		tracks ,err := client.GetUsersTopItems[types.Track](ctx, a.client, "tracks")
 
 		if err != nil {
 			return AppErr(err)
@@ -767,11 +892,9 @@ func GetUsersTopTracks(a *App) tea.Cmd {
 
 func GetUsersPlaylist(a *App) tea.Cmd {
 	return func() tea.Msg {
-		if a.AccessToken() == "" {
-			return AppErr(fmt.Errorf("access token in empty in GetUsersPlaylist"))
-		}
+		ctx := defaultAccessTokenCtx(a)
 
-		playlists, err := a.client.GetCurrentUsersPlaylists(a.AccessToken(), 10, 0)
+		playlists, err := a.client.GetCurrentUsersPlaylists(ctx, 10, 0)
 
 		if err != nil {
 			return AppErr(err)
@@ -781,45 +904,48 @@ func GetUsersPlaylist(a *App) tea.Cmd {
 	}
 }
 
-func GetAvailableDevices(a *App) tea.Cmd {
+type GetCurrentSessionPlayedResult struct {
+	result types.Page[types.PlayHistory]
+}
+
+func GetCurrentSessionPlayedCmd(a *App, params client.RecentlyPlayedTracksParams) tea.Cmd {
 	return func() tea.Msg {
-		if a.AccessToken() == "" {
-			return AppErr(fmt.Errorf("access token in empty in GetUsersPlaylist"))
+		ctx := defaultAccessTokenCtx(a)
+
+		page, err := a.client.GetRecentlyPlayedTracks(ctx, params)
+
+		if err != nil {
+			return AppErr(err)
 		}
 
-		accessToken := a.AccessToken()
+		return GetCurrentSessionPlayedResult{ result: page }
 
-		devices, err := a.client.GetAvailableDevices(accessToken)
+	}
+}
+
+func GetUsersRecentlyPlayedCmd(a *App, params client.RecentlyPlayedTracksParams) tea.Cmd {
+	return func() tea.Msg {
+		ctx := defaultAccessTokenCtx(a)
+		page, err := a.client.GetRecentlyPlayedTracks(ctx, params)
+
+		if err != nil {
+			return AppErr(err)
+		}
+
+		return GetUsersRecentlyPlayedResult{ result: page }
+	}
+}
+
+func GetAvailableDevices(a *App) tea.Cmd {
+	return func() tea.Msg {
+		ctx := defaultAccessTokenCtx(a)
+		devices, err := a.client.GetAvailableDevices(ctx)
 
 		if err != nil {
 			return AppErr(err)
 		}
 
 		return GetAvailableDevicesResult{ result: devices }
-	}
-}
-
-func GetCurrentlyPlayingTrack(a *App) tea.Cmd {
-	return func() tea.Msg {
-		if a.AccessToken() == "" {
-			return AppErr(fmt.Errorf("access token in GetCurrentlyPlayingTrack"))
-		}
-
-		accesstoken := a.AccessToken()
-
-		currentlyPlayTrack, err := a.client.GetCurrentlyPlayingTrack(accesstoken)
-
-		if err != nil {
-			return AppErr(err)
-		}
-
-		switch track := currentlyPlayTrack.(type) {
-		case *types.CurrentlyPlayingTrack:
-			return GetCurrentlyPlayingTrackResult{ result: track }
-		default:
-			return AppErr(fmt.Errorf("invalid type"))
-		}
-		
 	}
 }
 
@@ -830,13 +956,8 @@ func GetCurrentlyPlayingCmd(a *App) tea.Cmd {
 }
 
 func GetCurrentlyPlaying(a *App) tea.Msg {
-	if a.AccessToken() == "" {
-		return AppErr(fmt.Errorf("access token in GetCurrentlyPlayingTrack"))
-	}
-
-	accesstoken := a.AccessToken()
-
-	currentlyPlaying, err := a.client.GetCurrentlyPlaying(accesstoken)
+	ctx := defaultAccessTokenCtx(a)
+	currentlyPlaying, err := a.client.GetCurrentlyPlaying(ctx)
 
 	if err != nil {
 		return AppErr(err)
@@ -847,7 +968,7 @@ func GetCurrentlyPlaying(a *App) tea.Msg {
 
 func StartResumePlaybackCmd(a *App) tea.Cmd {
 	return func() tea.Msg {
-		accessToken := a.AccessToken()
+		ctx := defaultAccessTokenCtx(a)
 
 		deviceId, valid := a.ActiveDeviceId()
 
@@ -855,7 +976,11 @@ func StartResumePlaybackCmd(a *App) tea.Cmd {
 			return AppErr(fmt.Errorf("active device is either not set or active device id is not set"))
 		}
 
-		if err := a.client.StartResumePlayback(accessToken, deviceId); err != nil {
+		params := client.PlaybackActionParams{
+			DeviceId: deviceId,
+		}
+
+		if err := a.client.StartResumePlayback(ctx, params); err != nil {
 			return AppErr(err)
 		}
 
@@ -865,7 +990,7 @@ func StartResumePlaybackCmd(a *App) tea.Cmd {
 
 func PausePlaybackCmd(a *App) tea.Cmd {
 	return func() tea.Msg {
-		accessToken := a.AccessToken()
+		ctx := defaultAccessTokenCtx(a)
 
 		deviceId, valid := a.ActiveDeviceId()
 
@@ -873,7 +998,11 @@ func PausePlaybackCmd(a *App) tea.Cmd {
 			return AppErr(fmt.Errorf("active device is either not set or active device id is not set"))
 		}
 
-		if err := a.client.PausePlayback(accessToken, deviceId); err != nil {
+		params := client.PlaybackActionParams{
+			DeviceId: deviceId,
+		}
+
+		if err := a.client.PausePlayback(ctx, params); err != nil {
 			return AppErr(err)
 		}
 
@@ -883,7 +1012,7 @@ func PausePlaybackCmd(a *App) tea.Cmd {
 
 func SkipSongCmd(a *App, action string) tea.Cmd {
 	return func() tea.Msg {
-		accessToken := a.AccessToken()
+		ctx := defaultAccessTokenCtx(a)
 
 		deviceId, valid := a.ActiveDeviceId()
 
@@ -891,7 +1020,12 @@ func SkipSongCmd(a *App, action string) tea.Cmd {
 			return AppErr(fmt.Errorf("active device is either not set or active device id is not set"))
 		}
 
-		if err := a.client.SkipSong(accessToken, deviceId, action); err != nil{
+		params := client.SkipSongParams{
+			DeviceId: deviceId,
+			Direction: action,
+		}
+
+		if err := a.client.SkipSong(ctx, params); err != nil{
 			return AppErr(err)
 		}
 
@@ -901,9 +1035,8 @@ func SkipSongCmd(a *App, action string) tea.Cmd {
 
 func GetUsersQueueCmd(a *App) tea.Cmd {
 	return func() tea.Msg {
-		accessToken := a.AccessToken()
-
-		queue, err := a.client.GetQueue(accessToken)
+		ctx := defaultAccessTokenCtx(a)
+		queue, err := a.client.GetQueue(ctx)
 
 		if err != nil {
 			return AppErr(err)
@@ -915,7 +1048,7 @@ func GetUsersQueueCmd(a *App) tea.Cmd {
 	}
 }
 
-func GetPlaylistItemsCmd(a *App, playlistId string) tea.Cmd {
+func GetPlaylistItemsCmd(a *App, playlistId string, name string) tea.Cmd {
 	return func() tea.Msg {
 		accessToken := a.AccessToken()
 		items, err := a.client.GetPlaylistItems(accessToken, playlistId)
@@ -927,6 +1060,7 @@ func GetPlaylistItemsCmd(a *App, playlistId string) tea.Cmd {
 		return GetPlaylistItemsResult {
 			result: items,
 			id: playlistId,
+			name: name,
 		}
 	}
 }
@@ -934,13 +1068,20 @@ func GetPlaylistItemsCmd(a *App, playlistId string) tea.Cmd {
 
 func AddItemToQueueCmd(a *App, uri string) tea.Cmd {
 	return func() tea.Msg {
-		accessToken := a.AccessToken()
+		ctx := defaultAccessTokenCtx(a)
+
 		deviceId, valid := a.ActiveDeviceId()
+
 		if !valid {
 			return AppErr(fmt.Errorf("active device is not set up"))
 		}
 
-		err := a.client.AddItemToQueue(accessToken, uri, deviceId)
+		params := client.AddItemToQueueParams{
+			Uri: uri,
+			DeviceId: deviceId,
+		}
+
+		err := a.client.AddItemToQueue(ctx, params)
 
 		if err != nil {
 			return AppErr(err)
@@ -952,7 +1093,7 @@ func AddItemToQueueCmd(a *App, uri string) tea.Cmd {
 
 func SetPlaybackVolumeCmd(a *App, percent int) tea.Cmd {
 	return func() tea.Msg {
-		ctx := client.WithAccessToken(context.Background(), a.AccessToken())
+		ctx := defaultAccessTokenCtx(a)
 		
 		deviceId, valid := a.ActiveDeviceId()
 
@@ -960,11 +1101,50 @@ func SetPlaybackVolumeCmd(a *App, percent int) tea.Cmd {
 			return AppErr(fmt.Errorf("active device is not set up"))
 		}
 
-		if err := a.client.SetPlaybackVolume(ctx, deviceId, percent); err != nil {
+		params := client.SetPlaybackVolumeParams{
+			DeviceId: deviceId,
+			Percent: percent,
+		}
+
+		if err := a.client.SetPlaybackVolume(ctx, params); err != nil {
 			return AppErr(err)
 		}
 
 		return SetPlaybackVolumeResult{}
+	}
+}
+
+func GetPlaylistCmd(a *App, params client.GetPlaylistParams) tea.Cmd {
+	return func() tea.Msg {
+		ctx := client.WithAccessToken(context.Background(), a.AccessToken())
+
+		playlist, err := a.client.GetPlaylist(ctx, params)
+
+		if err != nil {
+			return AppErr(err)
+		}
+
+		return GetPlaylistResult {
+			id: params.Id,
+			result: playlist,
+		}
+	}
+}
+
+func AddItemsToPlaylistCmd(a *App, params client.AddItemsToPlaylistParams) tea.Cmd {
+	return func() tea.Msg {
+		ctx := client.WithAccessToken(context.Background(), a.AccessToken())
+
+		res, err := a.client.AddItemsToPlaylist(ctx, params)
+
+		if err != nil {
+			return AppErr(err)
+		}
+
+		return AddItemsToPlaylistResult{
+			result: res,
+		}
+	
 	}
 }
 
@@ -985,13 +1165,15 @@ func (a *App) authorizeClient() error {
 	return a.updateConfigDb(a.GetAuthorizationInfo())
 }
 
-func (a *App) updateRefreshToken(resp *client.SpotifyRefreshTokenResponse) error {
+func (a *App) updateRefreshToken(resp types.SpotifyRefreshTokenResponse) error {
 	if resp.AccessToken == "" {
 		return fmt.Errorf("refresh token was not refreshed")
 	}
 
 	a.SetAccessToken(resp.AccessToken)
-	a.SetRefreshToken(resp.RefreshToken)
+	if resp.RefreshToken.Valid {
+		a.SetRefreshToken(resp.RefreshToken.Value)
+	}
 
 	a.SetExpiresAt(getExpiresAtTime(resp.ExpiresIn))
 	a.tokenExpired = false
@@ -1000,7 +1182,9 @@ func (a *App) updateRefreshToken(resp *client.SpotifyRefreshTokenResponse) error
 }
 
 func (a *App) refreshTokens() error {
-	resp, err := a.client.RefreshToken(a.AccessToken(), a.RefreshToken(), a.ClientId())
+	ctx := defaultRefreshTokenCtx(a)
+
+	resp, err := a.client.RefreshToken(ctx)
 
 	if err != nil {
 		return err
@@ -1011,7 +1195,10 @@ func (a *App) refreshTokens() error {
 	}
 
 	a.SetAccessToken(resp.AccessToken)
-	a.SetRefreshToken(resp.RefreshToken)
+
+	if resp.RefreshToken.Valid {
+		a.SetRefreshToken(resp.RefreshToken.Value)
+	}
 
 	a.SetExpiresAt(getExpiresAtTime(resp.ExpiresIn))
 	a.tokenExpired = false
@@ -1052,3 +1239,215 @@ func (a *App) updateConfigDb(auth AuthorizationInfo) error {
 
 	return nil
 }
+
+type CliCommandHandler func(args ...string) error
+
+type CliCommands struct {
+	Commands map[string]CliCommandHandler
+}
+
+func (c *CliCommands) RegisterHandler(cmd string, f CliCommandHandler) {
+	c.Commands[cmd] = f
+}
+
+func NewCliCommands(a *App) *CliCommands {
+	commands := &CliCommands{
+		Commands: make(map[string]CliCommandHandler),
+	}
+	commands.RegisterHandler("player", PlayerHandler(a))
+	return commands
+}
+
+func (c *CliCommands) Run(cmd string, args ...string) error {
+	handler, ok := c.Commands[cmd]
+	if !ok {
+		return fmt.Errorf("handler for command %s not found", cmd)
+	}
+
+	return handler(args...)
+}
+
+func StatusHandler(a *App) CliCommandHandler {
+	statusCmd := flag.NewFlagSet("status", flag.ExitOnError)
+	return func(args ...string) error {
+		if err := statusCmd.Parse(args); err != nil {
+			statusCmd.Usage()
+			return err
+		}
+
+		ctx := client.WithAccessToken(context.Background(), a.AccessToken())
+
+		status, err := a.client.GetCurrentlyPlaying(ctx)
+
+		if err != nil {
+			return err
+		}
+
+		if !status.Item.Valid {
+			fmt.Println("there is nothing playing currently")
+			return nil
+		}
+
+		item := status.Item.Value
+
+		var name string
+
+		if item.Type == "track" {
+			name = item.Track.Name
+		} else {
+			name = item.Episode.Name
+		}
+
+		fmt.Printf("currently playing: %s", name)
+
+		return nil
+	}
+}
+
+func defaultAccessTokenCtx(a *App) context.Context {
+	return client.WithAccessToken(context.Background(), a.AccessToken())
+}
+
+func defaultRefreshTokenCtx(a *App) context.Context {
+	auth := a.GetAuthorizationInfo()
+	return client.ContextWithClientInfo(context.Background(), auth.accessToken, auth.refreshToken, auth.clientId, auth.clientSecret)
+}
+
+func PlayerHandler(a *App) CliCommandHandler {
+	var playpause bool
+	var nextSong bool
+	var prevSong bool
+	playerCmd := flag.NewFlagSet("player", flag.ExitOnError)
+	playerCmd.BoolVar(&playpause, "p", false, "play/pause")
+	playerCmd.BoolVar(&nextSong, "next", false, "next song")
+	playerCmd.BoolVar(&prevSong, "prev", false, "previous song")
+	return func(args ...string) error {
+		if err := playerCmd.Parse(args); err != nil {
+			playerCmd.Usage()
+			return err
+		}
+
+
+		ctx := defaultAccessTokenCtx(a)
+
+		currentlyPlaying, err := a.client.GetCurrentlyPlaying(ctx)
+
+		if err != nil {
+			return err
+		}
+
+		availableDevices, err := a.client.GetAvailableDevices(ctx)
+
+		if err != nil {
+			return err
+		}
+
+		var activeDevice types.Device
+		var found bool
+
+		for _, device := range availableDevices.Devices {
+			if device.IsActive {
+				found = true
+				activeDevice = device
+				break
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("could not find active devices")
+		}
+
+
+		activeDeviceId := activeDevice.Id.Value
+
+
+		if len(args) == 0 {
+			showArtistInfoCli(currentlyPlaying, activeDevice)
+			return nil
+		}
+
+		if playpause {
+
+			var action string
+
+			if currentlyPlaying.IsPlaying {
+				action = "pause"
+			} else {
+				action = "play"
+			}
+
+			params := client.PlaybackActionParams{
+				DeviceId: activeDeviceId,
+				Action: action,
+				Other: types.Optional[client.OtherParams]{
+					Valid: false,
+				},
+			}
+
+			if err := a.client.PlaybackAction(ctx, params); err != nil {
+				return err
+			}
+
+			return nil
+		}
+
+		if nextSong {
+			params := client.SkipSongParams{
+				DeviceId: activeDeviceId,
+				Direction: "next",
+			}
+
+			if err := a.client.SkipSong(ctx, params); err != nil {
+				return err
+			}
+
+			<-time.After(500*time.Millisecond)
+
+			nextSong, err := a.client.GetCurrentlyPlaying(ctx)
+
+			if err != nil {
+				return err
+			}
+
+			showArtistInfoCli(nextSong, activeDevice)
+
+		}
+
+		if prevSong {
+			params := client.SkipSongParams{
+				DeviceId: activeDeviceId,
+				Direction: "prev",
+			}
+
+			if err := a.client.SkipSong(ctx, params); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+}
+
+func showArtistInfoCli(currentlyPlaying types.CurrentlyPlaying, activeDevice types.Device) {
+	var name string
+	var artists string
+
+	item := currentlyPlaying.Item.Value
+
+	if currentlyPlaying.Item.Value.Type == "track" {
+		name = item.Track.Name
+
+		var a []string
+
+		for _, artist := range item.Track.Artists {
+			a = append(a, artist.Name)
+		}
+		artists = strings.Join(a, ",")
+	} else {
+		name = item.Episode.Name
+	}
+
+	fmt.Printf("playing: %s\nartists: %s\n", name, artists)
+	fmt.Printf("device: %s\n", activeDevice.Name)
+}
+

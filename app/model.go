@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	nested "go-spotify/models/list"
 	"github.com/charmbracelet/lipgloss"
+	"go-spotify/client"
 	"go-spotify/models/grid"
 	"go-spotify/types"
 	"go-spotify/models/media"
@@ -67,6 +68,10 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 	push := b.Append
 
 	switch msg := msg.(type) {
+	case AddItemsToPlaylistResult:
+		s := msg.result.SnapshotId
+		a.AppendMessage("item has been added to playlist " + s)
+		push(GetPlaylistItemsCmd(a, msg.id, msg.name))
 	case GetUserResult:
 		a.SetUser(msg.result)
 		a.AppendMessage("got setProfile result")
@@ -83,10 +88,20 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, _:= GetModel[List](a, "queue")
 		push(SetItems(&m, msg.result.Queue))
 		SetModel(a, m, "queue")
+	case GetPlaylistResult:
+		a.AddPlaylistToCache(msg.result)
+		a.SetDefaultPlaylist(msg.result)
 	case GetPlaylistItemsResult:
 		id := msg.id
 		a.data[id] = msg.result.Items
-		SetTable(a, msg.result.Items)
+		a.registerNewKey(msg.name, "default")
+		SetTable(a, msg.result.Items, msg.name)
+	case GetUsersRecentlyPlayedResult:
+		a.data["recently_played"] = msg.result.Items
+		SetTable(a, msg.result.Items, "Recently Played")
+	case GetCurrentSessionPlayedResult:
+		a.AppendMessage("received current session result" + fmt.Sprintf(" %d", len(msg.result.Items)))
+		SetTable(a, msg.result.Items, "Current Session")
 	case GetCurrentlyPlayingTrackResult:
 		if msg.result != nil {
 			a.foundCurrentlyPlaying = true
@@ -136,7 +151,7 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.db.Close()
 		return a, tea.Quit
 	case AppErr:
-		a.err = append(a.err, msg)
+		a.AppendMessage(msg.Error())
 	}
 
 	return a, b.Cmd()
@@ -179,6 +194,14 @@ func (a *App) currentlyPlayingArtistView() string {
 	device, _ := a.ActiveDeviceName()
 
 	s = lipgloss.JoinHorizontal(lipgloss.Top, s, "\t", "Device:" + device)
+
+	if !a.DefaultPlaylistIsValid() {
+		return blockStyle.Render(s)
+	}
+
+	playlist := a.DefaultPlaylistName()
+
+	s = lipgloss.JoinHorizontal(lipgloss.Top, s, "\t", "Default Playlist:" + playlist)
 
 	return blockStyle.Render(s)
 }
@@ -299,6 +322,119 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			push(updateSkipPrev(a))
 		case "a":
 			push(handleAddItem(a))
+		case "A":
+			pos := a.grid.Cursor()
+			switch m := a.grid.At(pos).(type) {
+			case nested.NestedList:
+				item := m.SelectedItem()
+
+				title := item.Title()
+
+				if !item.Expanded() {
+					break
+				}
+
+				switch title {
+				case "Playlists":
+					selectedPlaylist, ok := item.SelectedItem().(types.SimplifiedPlaylistObject)
+					if !ok {
+						break
+					}
+					id := selectedPlaylist.Id
+
+					if a.IsPlaylistInCache(id) {
+						p, ok := a.GetPlaylistFromCache(id)
+						if !ok {
+							break
+						}
+						a.SetDefaultPlaylist(p)
+						break
+					}
+
+					params := client.GetPlaylistParams{
+						Id: id,
+						Market: "US",
+					}
+					push(GetPlaylistCmd(a, params))
+				}
+			case Table[Rower]:
+				if !a.DefaultPlaylistIsValid() {
+					break
+				}
+
+				var uris []string
+				var id string
+				switch t := m.SelectedItem().(type) {
+				case types.Track:
+					uris = append(uris, t.Uri)
+				case types.PlaylistItemUnion:
+					if t.Track.Track.Type == "track" {
+						id = t.Track.Track.Id
+						uris = append(uris, t.Track.Track.Uri)
+					} else {
+						id = t.Track.Episode.Id
+						uris = append(uris, t.Track.Episode.Uri)
+					}
+				case types.PlayHistory:
+					id = t.Track.Id
+					uris = append(uris, t.Track.Uri)
+				}
+
+				a.AppendMessage(fmt.Sprintf("%v", uris))
+
+				if a.ExistsInDefaultPlaylist(id) {
+					a.AppendMessage("selected track already exists in the default playlist")
+					break
+				}
+
+				playlistId := a.DefaultPlaylistId()
+
+				params := client.AddItemsToPlaylistParams{
+					Id: playlistId,
+					Uris: uris,
+				}
+
+				push(AddItemsToPlaylistCmd(a, params))
+				
+			}
+		case "C":
+			if !a.CurrentlyPlayingIsValid() {
+				a.AppendMessage("currently playing has not been set")
+				break
+			}
+
+			playing := a.CurrentlyPlayingItem()
+
+			var id string
+			var uris []string
+
+			switch playing.Type {
+			case "track":
+				id = playing.Track.Id
+				uris = append(uris, playing.Track.Uri)
+			case "episode":
+				id = playing.Episode.Id
+				uris = append(uris, playing.Episode.Uri)
+			}
+
+			if !a.DefaultPlaylistIsValid() {
+				a.AppendMessage("default playlist has not been set")
+				break
+			}
+
+			if a.ExistsInDefaultPlaylist(id) {
+				a.AppendMessage("selected track already exists in the default playlist")
+				break
+			}
+
+			playlistId := a.DefaultPlaylistId()
+
+			params := client.AddItemsToPlaylistParams{
+				Id: playlistId,
+				Uris: uris,
+			}
+
+			push(AddItemsToPlaylistCmd(a, params))
 		case "c":
 			pos := a.grid.Cursor()
 			switch m := a.grid.At(pos).(type) {
@@ -307,7 +443,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				idx := m.Index()
 				item.Collapse()
 				m.SetItem(item, idx)
-				
 				a.grid.SetModelPos(m, pos)
 			}
 			
@@ -341,9 +476,26 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						case "Top Tracks":
 							items, ok := a.data["top_tracks"].([]types.Track)
 							if !ok {
+								push(GetUsersTopTracks(a))
 								break
 							}
-							SetTable(a, items)
+							SetTable(a, items, "Top Tracks")
+						case "Recently Played":
+							items, ok := a.data["recently_played"].([]types.PlayHistory)
+							if !ok {
+								params := client.RecentlyPlayedTracksParams{
+									Limit: 30,
+								}
+								push(GetUsersRecentlyPlayedCmd(a, params))
+								break
+							}
+							SetTable(a, items, "Recently Played")
+						case "Current Session":
+							params := client.RecentlyPlayedTracksParams{
+								Limit: 10,
+								After: int(a.sessionStart.UnixMilli()),
+							}
+							push(GetCurrentSessionPlayedCmd(a, params))
 						}
 					}
 
@@ -475,7 +627,7 @@ func handleSidebarSelection(a *App, m nested.NestedList) tea.Cmd {
 		if !ok {
 			return nil
 		}
-		SetTable(a, vals)
+		SetTable(a, vals, "Top Tracks")
 	case "Playlists":
 		playlist, ok := item.(types.SimplifiedPlaylistObject)
 
@@ -486,7 +638,7 @@ func handleSidebarSelection(a *App, m nested.NestedList) tea.Cmd {
 		items, ok := a.data[playlist.Id]
 
 		if !ok {
-			return GetPlaylistItemsCmd(a, playlist.Id)
+			return GetPlaylistItemsCmd(a, playlist.Id, playlist.Name)
 		}
 
 		vals, ok := items.([]types.PlaylistItemUnion)
@@ -495,22 +647,69 @@ func handleSidebarSelection(a *App, m nested.NestedList) tea.Cmd {
 			return nil
 		}
 
-		SetTable(a, vals)
+		SetTable(a, vals, playlist.Name)
 	}
 
 	return nil
 }
 
-func SetTable[S []T, T Rower](a *App, s S) {
-	t, ok := GetModel[Table[Rower]](a, "table")
+func SetTableColumns[T Rower](t *Table[T], title string) {
+	t.title = title
+
+	switch title {
+	case "Recently Played", "Current Session":
+		t.t.SetColumns(playHistoryColumns())
+	default:
+		t.t.SetColumns(defaultColumns())
+	}
+}
+
+func SetTableItems[T Rower](t *Table[T], s []T) {
+	t.items = s
+	t.setRows(s)
+}
+
+func (a *App) registerNewKey(title string, key string) {
+	a.viewMapKeys[title] = key
+}
+
+func (a *App) getKey(title string) string {
+	return a.viewMapKeys[title]
+}
+
+func (a *App) isSameViewModel(title1, title2 string) bool {
+	return a.getKey(title1) == a.getKey(title2)
+}
+
+func (a *App) getViewModel(title string) (Table[Rower], bool) {
+	key := a.getKey(title)
+	t, ok := a.viewMap[key]
+	return t, ok
+}
+
+func (a *App) setViewModel(title string, m Table[Rower]) {
+	a.viewMap[title] = m
+}
+
+func SetTable[T Rower](a *App, s []T, title string) {
+	//t, ok := GetModel[Table[Rower]](a, "table")
+	//if !ok {
+	//	return
+	//}
+
+	t, ok := a.getViewModel(title)
+
 	if !ok {
 		return
 	}
+	t.SetTitle(title)
 	SetTableItems(&t, toRows(s))
+	t.SetWidth(int(float64(a.width)*0.6))
 	t.t.Focus()
 	a.grid.SetFocus(true)
 	tablePos := a.posMap["table"]
 	a.grid.SetCursor(tablePos)
+	a.setViewModel(title, t)
 	SetModel(a, t, "table")
 }
 
@@ -537,6 +736,8 @@ func handleAddItem(a *App) tea.Cmd {
 			msg = "selected item is a playlist item track" + " " + uri
 		case "episode":
 		}
+	case types.PlayHistory:
+		uri = item.Track.Uri
 	}
 
 	if msg != "" {
@@ -567,7 +768,7 @@ func handlePlaylistSelection(a *App, item list.Item) tea.Cmd {
 
 	a.AppendMessage("playlistId: " + playlistId)
 
-	return GetPlaylistItemsCmd(a, playlistId)
+	return GetPlaylistItemsCmd(a, playlistId, selectedItem.Name)
 }
 
 func (a *App) viewActiveDevice() string {
@@ -587,11 +788,9 @@ func (a *App) viewActiveDevice() string {
 }
 
 func (a *App) View() string {
-	//builder := &strings.Builder{}
 	titleView :=  a.styles.title.Width(a.width).Align(lipgloss.Center).Render(a.title)
 	infoView := a.styles.infoStyle.Width(a.width).Render(a.currentlyPlayingArtistView())
 	gridView := a.styles.gridStyle.Render(a.grid.View())
-	//titleView = lipgloss.Place(a.width, 1, lipgloss.Center, lipgloss.Center, titleView)
 	s := lipgloss.JoinVertical(lipgloss.Center, titleView, infoView)
 	s = lipgloss.JoinVertical(lipgloss.Left, s, gridView)
 	return s

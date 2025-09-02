@@ -270,16 +270,48 @@ type Table[T Rower] struct {
 	t table.Model
 }
 
-func NewTable[T Rower]() Table[T] {
-	t := table.New()
-	columns := []table.Column{
-		{ Title: "Name", Width: 40 },
-		{ Title: "Artist", Width: 40 },
-		{ Title: "Album", Width: 30 },
-		{ Title: "Duration", Width: 30 },
+func defaultColumns() []table.Column {
+	return []table.Column{
+		{ Title: "Name", Width: 30 },
+		{ Title: "Artist", Width: 30 },
+		{ Title: "Album", Width: 20 },
+		{ Title: "Duration", Width: 20 },
 	}
+}
+
+func defaultColumnsWithWidth(w int) []table.Column {
+	return []table.Column{
+		{ Title: "Name", Width: int(float64(w)*0.30) },
+		{ Title: "Artist", Width: int(float64(w)*0.30) },
+		{ Title: "Album", Width: int(float64(w)*0.20) },
+		{ Title: "Duration", Width: int(float64(w)*0.20) },
+	}
+}
+
+func playHistoryColumns() []table.Column {
+	return []table.Column{
+		{ Title: "Name", Width: 30 },
+		{ Title: "Artist", Width: 30 },
+		{ Title: "Album", Width: 10 },
+		{ Title: "Duration", Width: 10 },
+		{ Title: "Played At", Width: 20 },
+	}
+}
+
+func playHistoryColumnsWidth(w int) []table.Column {
+	return []table.Column{
+		{ Title: "Name", Width: int(float64(w)*0.30) },
+		{ Title: "Artist", Width: int(float64(w)*0.20) },
+		{ Title: "Album", Width: int(float64(w)*0.20) },
+		{ Title: "Duration", Width: int(float64(w)*0.10) },
+		{ Title: "Played At", Width: int(float64(w)*0.20) },
+	}
+}
+
+func NewTable[T Rower](columns []table.Column) Table[T] {
+	t := table.New()
 	t.SetColumns(columns)
-	return Table[T] {
+	return Table[T]{
 		t: t,
 	}
 }
@@ -296,10 +328,21 @@ func (t *Table[T]) SetTitle(title string) {
 	t.title = title
 }
 
-func SetTableItems[T Rower](t *Table[T], s []T) {
-	t.items = s
-	t.setRows(s)
+func (t Table[T]) Title() string {
+	return t.title
 }
+
+func (t *Table[T]) SetTitleAndColumns(title string) {
+	t.title = title
+
+	switch title {
+	case "Recently Played", "Current Session":
+		t.t.SetColumns(playHistoryColumns())
+	default:
+		t.t.SetColumns(defaultColumns())
+	}
+}
+
 
 func toRows[S []T, T Rower](s S) []Rower {
 	items := make([]Rower, 0, len(s))
@@ -326,29 +369,15 @@ func (t *Table[T]) SetWidth(w int) {
 	t.t.SetWidth(w)
 	w = t.t.Width()
 
-	cols := t.t.Columns()
-	c := make([]table.Column, 0, len(cols))
+	var columns []table.Column
 
-	for _, col := range cols {
-		var column table.Column
-		switch title := col.Title; title {
-		case "Name":
-			column.Width = int(0.30*float64(w))
-			column.Title = title
-		case "Artist":
-			column.Width = int(0.30*float64(w))
-			column.Title = title
-		case "Album":
-			column.Width = int(0.20*float64(w))
-			column.Title = title
-		case "Duration":
-			column.Width = int(0.20*float64(w))
-			column.Title = title
-		}
-		c = append(c, column)
+	if len(t.Columns()) == 5 {
+		columns = playHistoryColumnsWidth(w)
+	} else {
+		columns = defaultColumnsWithWidth(w)
 	}
 
-	t.SetColumns(c)
+	t.SetColumns(columns)
 }
 
 func (t *Table[T]) SetColumns(cols []table.Column) {
@@ -389,7 +418,7 @@ func (t Table[T]) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (t Table[T]) View() string {
 	if t.title != "" {
-		return lipgloss.JoinVertical(lipgloss.Center, t.title, t.t.View())
+		return lipgloss.JoinVertical(lipgloss.Left, t.title, t.t.View())
 	}
 	return t.t.View()
 }

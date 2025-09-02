@@ -5,7 +5,25 @@ import (
 	"encoding/json"
 	"strings"
 	"fmt"
+	//"strconv"
+	"time"
 )
+
+type SpotifyRefreshTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType string `json:"token_type"`
+	Scope string `json:"scope"`
+	ExpiresIn int `json:"expires_in"`
+	RefreshToken Optional[string] `json:"refres_token"`
+}
+
+type SpotifyAuthorizationResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType string `json:"token_type"`
+	Scope string `json:"scope"`
+	ExpiresIn int `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
+}
 
 type Optional[T any] struct {
 	Value T
@@ -89,6 +107,10 @@ func (i PlaylistItemUnion) Row() table.Row {
 	return row
 }
 
+type PlaylistSnapshot struct {
+	SnapshotId string `json:"snapshot_id"`
+}
+
 type Page[T any] struct {
 	Href string `json:"href"`
 	Limit int `json:"limit"`
@@ -106,6 +128,36 @@ type CurrentUsersPlaylistResponse struct {
 	Previous string `json:"previous,omitempty"`
 	Total int `json:"total"`
 	Items []SimplifiedPlaylistObject `json:"items"`
+}
+
+type PlayHistory struct {
+	Track Track `json:"track"`
+	PlayedAt string `json:"played_at"`
+	Context Context `json:"context"`
+}
+
+func (p PlayHistory) FilterValue() string {
+	return ""
+}
+
+func (p PlayHistory) Row() table.Row {
+	row := p.Track.Row()
+	t, _ := time.Parse(time.RFC3339, p.PlayedAt)
+	row = append(row, t.Format(time.DateTime))
+	return row
+}
+
+type SavedTrack struct {
+	AddedAt string `json:"addedAt"`
+	Track Track `json:"track"`
+}
+
+func (s SavedTrack) FilterValue() string {
+	return ""
+}
+
+func (s SavedTrack) Row() table.Row {
+	return s.Track.Row()
 }
 
 type SimplifiedPlaylistObject struct {
@@ -257,6 +309,30 @@ type Album struct {
 	ReleaseDatePrecision string `json:"release_date_precision"`
 }
 
+type Playlist struct {
+	Collaborative bool `json:"collaborative"`
+	Description string `json:"description"`
+	ExternalUrls ExternalUrl `json:"external_urls"`
+	Href string `json:"href"`
+	Id string `json:"id"`
+	Name string `json:"Name"`
+	Owner Owner `json:"owner"`
+	Public bool `json:"public"`
+	SnapshotId string `json:"snapshot_id"`
+	Uri string `json:"uri"`
+	Type string `json:"type"`
+	Tracks Page[PlaylistItemUnion] `json:"tracks"`
+}
+
+type Owner struct {
+	ExternalUrls ExternalUrl `json:"external_urls"`
+	Href string `json:"href"`
+	Id string `json:"id"`
+	Type string `json:"type"`
+	Uri string `json:"uri"`
+	DisplayName Optional[string] `json:"display_name"`
+}
+
 func (a Album) FilterValue() string {
 	return ""
 }
@@ -267,20 +343,6 @@ type SimplifiedArtist struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
 	Uri string `json:"uri"`
-}
-
-type PlaylistItems struct {
-	Href string `json:"href"`
-	Limit int `json:"limit"`
-	Next string `json:"next"`
-	Prev string `json:"previous"`
-	Total int `json:"total"`
-	Items []*PlaylistTrack `json:"items"`
-}
-
-type PlaylistTrack struct {
-	AddAt string `json:"added_at"`
-	Track *Track
 }
 
 type Track struct {
