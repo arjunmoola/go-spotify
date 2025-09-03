@@ -163,10 +163,7 @@ func (a *App) getClientInfo() error {
 	a.SetExpiresAt(expiresAt)
 
 	if time.Now().Compare(expiresAt) >= 0 {
-		log.Println("token is expired")
 		a.tokenExpired = true
-	} else {
-		log.Println("token is not expired")
 	}
 
 	return nil
@@ -1401,7 +1398,7 @@ func PlayerHandler(a *App) CliCommandHandler {
 				return err
 			}
 
-			<-time.After(500*time.Millisecond)
+			<-time.After(250*time.Millisecond)
 
 			nextSong, err := a.client.GetCurrentlyPlaying(ctx)
 
