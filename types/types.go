@@ -579,3 +579,9 @@ type Cursors struct {
 	After string `json:"after"`
 	Before string `json:"before"`
 }
+
+type SearchResult struct {
+	Tracks Page[Track]
+	Artists Page[Artist]
+	Playlists Page[Playlist]
+}

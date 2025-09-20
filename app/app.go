@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	//"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/progress"
+	"go-spotify/models/textinput"
 	"fmt"
 	"time"
 	"log"
@@ -306,14 +307,37 @@ type App struct {
 	currentlyPlaying Optional[types.CurrentlyPlaying]
 	info SpotifyInfo
 
+	textInputFocus bool
+	inputState textInputState
+
 	sessionStart time.Time
 
 	defaultPlaylist Optional[types.Playlist]
+	prevPos Optional[grid.Position]
+	prevGrid Optional[grid.Position]
+	
+	inputValue Optional[string]
+	searchResults Optional[types.SearchResult]
 }
 
 type Optional[T any] struct {
 	Value T
 	Valid bool
+}
+
+func (a *App) SetSearchResults(result types.SearchResult) {
+	a.searchResults = Optional[types.SearchResult]{
+		Value: result,
+		Valid: true,
+	}
+}
+
+func (a *App) GetSearchResults() (types.SearchResult, bool) {
+	if a.searchResults.Valid {
+		var res types.SearchResult
+		return res, false
+	}
+	return a.searchResults.Value, a.searchResults.Valid
 }
 
 func (a *App) IsPlaylistInCache(id string) bool {
@@ -632,23 +656,28 @@ func New(clientId, clientSecret, redirectUri string) *App {
 	//viewMapKeys["Current Session"] = "recently_played"
 	viewMapKeys["Playlist Items"] = "default"
 
+	input := textinput.New()
+
 	//row := grid.NewRow(artists, tracks, playlists, playlistItems, devices, queue)
 	media := media.New("prev", "play", "next", "up", "down")
+	row1 := grid.NewRow(input)
 	row2 := grid.NewRow(sidebar, table1, queue)
 	row3 := grid.NewRow(messages, devices)
 	row4 := grid.NewRow(media)
 
 	g := grid.New()
-	g.Append(row2, row3, row4)
-	g.SetReadonly(2)
+	g.Append(row1, row2, row3, row4)
+	g.SetReadonly(0)
+	g.SetReadonly(3)
 
 	posMap := make(map[string]grid.Position)
-	posMap["devices"] = grid.Pos(1, 1)
-	posMap["queue"] = grid.Pos(0, 2)
-	posMap["sidebar"] = grid.Pos(0, 0)
-	posMap["messages"] = grid.Pos(1, 0)
-	posMap["media"] = grid.Pos(2, 0)
-	posMap["table"] = grid.Pos(0, 1)
+	posMap["textinput"] = grid.Pos(0, 0)
+	posMap["devices"] = grid.Pos(2, 1)
+	posMap["queue"] = grid.Pos(1, 2)
+	posMap["sidebar"] = grid.Pos(1, 0)
+	posMap["messages"] = grid.Pos(2, 0)
+	posMap["media"] = grid.Pos(3, 0)
+	posMap["table"] = grid.Pos(1, 1)
 
 	typeMap := make(map[grid.Position]string)
 
@@ -795,6 +824,10 @@ type AddItemsToPlaylistResult struct {
 	result types.PlaylistSnapshot
 	id string
 	name string
+}
+
+type GetSearchResults struct {
+	result types.SearchResult
 }
 
 type AddItemToQueueResult struct{}
@@ -1142,6 +1175,22 @@ func AddItemsToPlaylistCmd(a *App, params client.AddItemsToPlaylistParams) tea.C
 			result: res,
 		}
 	
+	}
+}
+
+func GetSearchResultCmd(a *App, params client.GetSearchResultsParams) tea.Cmd {
+	return func() tea.Msg {
+		ctx := client.WithAccessToken(context.Background(), a.AccessToken())
+
+		res, err := a.client.GetSearchResults(ctx, params)
+
+		if err != nil {
+			return AppErr(err)
+		}
+
+		return GetSearchResults{
+			result: res,
+		}
 	}
 }
 

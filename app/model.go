@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	nested "go-spotify/models/list"
 	"github.com/charmbracelet/lipgloss"
+	"go-spotify/models/textinput"
 	"go-spotify/client"
 	"go-spotify/models/grid"
 	"go-spotify/types"
@@ -63,11 +64,16 @@ func SetSideBarItems[S []T, T nested.Viewer](a *App, title string, s S) {
 	SetModel(a, m, "sidebar")
 }
 
-func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var b Batch
+func (a *App) updateResults(msg tea.Msg, b *Batch) {
 	push := b.Append
-
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.height = msg.Height
+		a.width = msg.Width
+		updateModelDims(a)
+	case GetSearchResults:
+		a.SetSearchResults(msg.result)
+		a.AppendMessage(fmt.Sprintf("received results. %d artitsts, %d tracks", msg.result.Artists.Total, msg.result.Tracks.Total))
 	case AddItemsToPlaylistResult:
 		s := msg.result.SnapshotId
 		a.AppendMessage("item has been added to playlist " + s)
@@ -147,14 +153,9 @@ func (a *App) updateResults(msg tea.Msg) (tea.Model, tea.Cmd) {
 		push(GetUsersQueueCmd(a))
 	case SkipItemResult:
 		push(GetUsersQueueCmd(a))
-	case Shutdown:
-		a.db.Close()
-		return a, tea.Quit
 	case AppErr:
 		a.AppendMessage(msg.Error())
 	}
-
-	return a, b.Cmd()
 }
 
 func (a *App) currentlyPlayingArtistView() string {
@@ -265,6 +266,10 @@ func updateModelDims(a *App) {
 	media, _ := GetModel[media.Model](a, "media")
 	media.SetWidth(a.width)
 	SetModel(a, media, "media")
+
+	input, _ := GetModel[textinput.Model](a, "textinput")
+	input.Input.Width = a.width
+	SetModel(a, input, "textinput")
 }
 
 func GetModel[T tea.Model](a *App, key string) (T, bool) {
@@ -288,32 +293,116 @@ func SetModel[T tea.Model](a *App, model T, key string) {
 	a.grid.SetModelPos(model, pos)
 }
 
-func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var b Batch
+type textInputState int
+
+const (
+	textInputDeactivated textInputState = 1 << iota
+	textInputActivated
+	textInputSearch
+	textInputCommand
+)
+
+func (a *App) setTextInputState(state textInputState) {
+	a.inputState = state
+}
+
+func (a *App) updateTextInput(msg tea.Msg, b *Batch) bool {
+	var inputActivated bool
+
 	push := b.Append
-
-	_, cmd := a.updateResults(msg)
-	push(cmd)
-
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		a.height = msg.Height
-		a.width = msg.Width
-		updateModelDims(a)
+	case tea.KeyMsg:
+		switch s := msg.String(); s {
+		case "esc":
+			inputPos := a.posMap["textinput"]
+			m := a.grid.At(inputPos).(textinput.Model)
+
+			if m.Input.Focused() {
+				m.Input.Blur()
+				a.textInputFocus = false
+				m.Input.Reset()
+				a.setTextInputState(textInputDeactivated)
+				SetModel(a, m, "textinput")
+				if a.prevPos.Valid {
+					prevPos := a.prevPos.Value
+					a.grid.SetCursor(prevPos)
+				}
+
+				if a.inputValue.Valid {
+					a.inputValue = Optional[string]{}
+				}
+			}
+		case "/", ":":
+			inputPos := a.posMap["textinput"]
+			m := a.grid.At(inputPos).(textinput.Model)
+
+			if m.Input.Focused() {
+				break
+			}
+			curPos := a.grid.Cursor()
+			a.prevPos = Optional[grid.Position]{
+				Value: curPos,
+				Valid: true,
+			}
+
+			if s == ":" {
+				a.setTextInputState(textInputCommand)
+			} else if s == "/" {
+				a.setTextInputState(textInputSearch)
+			}
+
+			m.Input.Reset()
+			push(m.Input.Focus())
+			a.textInputFocus = true
+			SetModel(a, m, "textinput")
+			a.grid.SetCursor(inputPos)
+			a.grid.SetFocus(true)
+			inputActivated = true
+		case "enter":
+			switch a.inputState {
+			case textInputCommand:
+			case textInputSearch:
+				m := a.grid.At(a.grid.Cursor()).(textinput.Model)
+				value := m.Input.Value()
+				a.inputValue = Optional[string]{
+					Value: value,
+					Valid: true,
+				}
+				params := client.GetSearchResultsParams{
+					Q: value,
+					Type: []string{ "artist", "album", "playlist", "track" },
+					Market: "US",
+				}
+				push(GetSearchResultCmd(a, params))
+			}
+		}
+	}
+
+	return inputActivated
+}
+
+func (a *App) update(msg tea.Msg, b *Batch) {
+	push := b.Append
+	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch key := msg.String(); key {
-		case "ctrl+c":
-			return a, ShutDownApp(a)
 		case "esc":
 			if a.grid.Focus() {
 				a.grid.SetFocus(false)
-				break
+
+				if a.prevGrid.Valid {
+					prevPos := a.prevGrid.Value
+					a.grid.SetCursor(prevPos)
+					a.prevGrid = Optional[grid.Position]{}
+					a.grid.SetFocus(true)
+				}
 			}
-			return a, tea.Quit
+		case "ctrl+r":
+			push(GetCurrentlyPlayingCmd(a))
+			push(GetUsersQueueCmd(a))
+			a.AppendMessage("retrying getCurrentlyPlaying")
 		case "up", "down":
 			//push(updatePlaybackVolume(a, key))
-		case "q":
-			return a, tea.Quit
 		case "p":
 			push(updatePlaybackStatus(a))
 		case "n":
@@ -471,7 +560,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					if !item.Expandable() {
 						title := item.Title()
-
+						a.prevGrid = Optional[grid.Position]{
+							Value: pos,
+							Valid: true,
+						}
 						switch title {
 						case "Top Tracks":
 							items, ok := a.data["top_tracks"].([]types.Track)
@@ -506,8 +598,42 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	a.grid, cmd = a.grid.Update(msg)
-	push(cmd)
+
+}
+
+func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case Shutdown:
+		a.db.Close()
+		return a, tea.Quit
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			return a, ShutDownApp(a)
+		case "esc":
+			if !a.grid.Focus() {
+				return a, tea.Quit
+			}
+		}
+	}
+
+	var b Batch
+
+	a.updateResults(msg, &b)
+	inputActivated := a.updateTextInput(msg, &b)
+
+	if !a.textInputFocus {
+		a.update(msg,&b)
+	}
+
+	var cmd tea.Cmd
+
+	if !inputActivated {
+		a.grid, cmd = a.grid.Update(msg)
+	}
+
+	b.Append(cmd)
+
 	return a, b.Cmd()
 }
 
@@ -517,6 +643,7 @@ func updatePlaybackVolume(a *App, dir string) tea.Cmd {
 	if !valid {
 		return nil
 	}
+
 	switch dir {
 	case "up":
 		percent += 5

@@ -170,6 +170,14 @@ func newUrlValues() *urlValues {
 	}
 }
 
+func (u *urlValues) setQ(q string) {
+	u.v.Set("q", q)
+}
+
+func (u *urlValues) setType(types []string) {
+	u.v.Set("type", strings.Join(types, ","))
+}
+
 func (u *urlValues) setMarket(m string) {
 	u.v.Set("market", m)
 }
@@ -748,7 +756,7 @@ func marshalRequestBody(payload any) (io.Reader, error) {
 }
 
 func (c *Client) StartResumePlayback(ctx context.Context, params PlaybackActionParams) error {
-	u, err := createApiUrl("players", "play")
+	u, err := createApiUrl("player", "play")
 
 	if err != nil {
 		return err
@@ -1272,6 +1280,48 @@ func (c *Client) GetArtistsTopTracks(ctx context.Context, params GetArtistsTopTr
 	}
 
 	return tracks, nil
+}
+
+type GetSearchResultsParams struct {
+	Q string
+	Type []string
+	Market string
+	Limit int
+	Offset int
+}
+
+func (p GetSearchResultsParams) set(u *urlValues) {
+	u.setQ(p.Q)
+
+	if len(p.Type) == 0 {
+		u.setType([]string{"artist", "album", "track", "playlist"})
+	} else {
+		u.setType(p.Type)
+	}
+}
+
+func (c *Client) GetSearchResults(ctx context.Context, params GetSearchResultsParams) (types.SearchResult, error) {
+	var result types.SearchResult
+
+	u, err := createBaseApiUrl("search")
+
+	if err != nil {
+		return result, err
+	}
+
+	setAndEncodeUrl(u, params)
+
+	req, err := NewRequestFromContext(ctx, http.MethodGet, u.String(), nil)
+
+	if err != nil {
+		return result, err
+	}
+
+	if err := fetchResponse(c, req, &result); err != nil {
+		return result, err
+	}
+
+	return result, nil
 }
 
 func fetchResponse(c *Client, req *http.Request, v any) error {
