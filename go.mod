@@ -1,4 +1,4 @@
-module go-spotify
+module github.com/arjunmoola/go-spotify
 
 go 1.24.1
 

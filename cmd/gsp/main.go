@@ -1,27 +1,10 @@
 package main
 
 import (
-	"go-spotify/app"
-	"github.com/joho/godotenv"
+	"github.com/arjunmoola/go-spotify/app"
 	"log"
 	"os"
 )
-
-var clientSecret string
-var clientId string
-var redirectUri string
-
-func loadEnv() error {
-	if err := godotenv.Load(); err != nil {
-		log.Fatal(err)
-	}
-
-	clientId = os.Getenv("CLIENTID")
-	clientSecret = os.Getenv("CLIENTSECRET")
-	redirectUri = os.Getenv("REDIRECTURI")
-
-	return nil
-}
 
 func runCli(commands *app.CliCommands) error {
 	cmd := os.Args[1]
@@ -40,11 +23,7 @@ func runCli(commands *app.CliCommands) error {
 }
 
 func main() {
-	if err := loadEnv(); err != nil {
-		log.Fatal(err)
-	}
-
-	a := app.New(clientId, clientSecret, redirectUri)
+	a := app.New()
 
 	if err := a.Setup(); err != nil {
 		log.Fatal(err)
@@ -56,8 +35,11 @@ func main() {
 		if err := a.Run(); err != nil {
 			log.Fatal(err)
 		}
-		return
 	} else {
+		if err := a.SetupCli(); err != nil {
+			log.Fatal(err)
+		}
+
 		if err := runCli(cli); err != nil {
 			log.Fatal(err)
 		}

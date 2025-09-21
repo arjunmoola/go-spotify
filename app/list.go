@@ -6,8 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
-	"go-spotify/types"
-	//"go-spotify/models/list"
+	"github.com/arjunmoola/go-spotify/types"
 	"io"
 	"fmt"
 )

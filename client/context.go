@@ -7,6 +7,7 @@ import (
 
 var ErrAccessTokenNotFound = errors.New("access token could not be found within the provided context")
 var ErrAuthInfoNotFound = errors.New("authorization info has not been provided throught the context")
+var ErrAuthorizationNotFound = errors.New("authorization has not been provided through the context")
 
 type accessTokenContextKey string
 type authContextKey string
@@ -17,6 +18,7 @@ type authInfo struct {
 	refreshToken string
 	clientId string
 	clientSecret string
+	redirectUri string
 }
 
 type contextValue struct {
@@ -28,6 +30,7 @@ type contextValue struct {
 var accessTokenKey string = "access_token"
 var authInfoKey string = "auth_info"
 var ctxValueKey contextTypeKey = "context_val"
+var authorizationKey string = "authorization"
 
 
 func WithAccessToken(ctx context.Context, accessToken string) context.Context {
@@ -36,6 +39,37 @@ func WithAccessToken(ctx context.Context, accessToken string) context.Context {
 		accessToken: accessToken,
 	}
 	return context.WithValue(ctx, ctxValueKey, val)
+}
+
+func ContextWithAuthorization(ctx context.Context, clientId string, clientSecret string, redirectUri string) context.Context {
+	auth := authInfo{
+		clientId: clientId,
+		clientSecret: clientSecret,
+		redirectUri: redirectUri,
+	}
+
+	value := contextValue{
+		ctxType: authorizationKey,
+		authInfo: auth,
+	}
+
+	return context.WithValue(ctx, ctxValueKey, value)
+}
+
+func getAuthorization(ctx context.Context) (authInfo, error) {
+	var zero authInfo
+
+	v, ok := ctx.Value(authorizationKey).(contextValue)
+
+	if !ok {
+		return zero, ErrAuthInfoNotFound
+	}
+
+	if v.ctxType != authorizationKey {
+		return zero, ErrAuthInfoNotFound
+	}
+
+	return v.authInfo, nil
 }
 
 func ContextWithClientInfo(ctx context.Context, accessToken string, refreshToken string, clientId string, clientSecret string) context.Context {

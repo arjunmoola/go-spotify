@@ -5,22 +5,23 @@ import (
 	"flag"
 	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/spinner"
 	//"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/progress"
-	"go-spotify/models/textinput"
+	"github.com/arjunmoola/go-spotify/models/textinput"
 	"fmt"
 	"time"
 	"log"
 	"context"
 	"database/sql"
-	"go-spotify/types"
-	schema "go-spotify/sql"
+	"github.com/arjunmoola/go-spotify/types"
+	schema "github.com/arjunmoola/go-spotify/sql"
 	"path/filepath"
-	"go-spotify/database"
-	"go-spotify/client"
-	"go-spotify/models/grid"
-	"go-spotify/models/media"
-	nested "go-spotify/models/list"
+	"github.com/arjunmoola/go-spotify/database"
+	"github.com/arjunmoola/go-spotify/client"
+	"github.com/arjunmoola/go-spotify/models/grid"
+	"github.com/arjunmoola/go-spotify/models/media"
+	nested "github.com/arjunmoola/go-spotify/models/list"
 	//"github.com/charmbracelet/bubbles/list"
 	_ "github.com/tursodatabase/go-libsql"
 	"errors"
@@ -33,6 +34,8 @@ type AppState int
 const (
 	InitializationState AppState = iota
 	InitializationErrState
+	AuthorizingNewLogin
+	InitializationDone
 	Menu
 )
 
@@ -82,6 +85,45 @@ func (a *App) initializeConfigDir() error {
 	return nil
 }
 
+type initializeDbMsg struct {
+	db *sql.DB
+	dbUrl string
+	err error
+}
+
+func (m initializeDbMsg) Err() error {
+	return m.err
+}
+
+func initializeDbCmd(a *App) tea.Cmd {
+	return func() tea.Msg {
+		dburl := "file:" + filepath.Join(a.configDir, defaultDbName)
+
+		db, err := sql.Open(dbDriver, dburl)
+
+		if err != nil {
+			return initializeDbMsg{
+				err: err,
+			}
+		}
+
+		if err := db.Ping(); err != nil {
+			return initializeDbMsg{ err: err }
+		}
+
+		_, err = db.Exec(ddl)
+
+		if err != nil {
+			return initializeDbMsg{ err: err }
+		}
+
+		return initializeDbMsg{
+			db: db,
+			dbUrl: dburl,
+		}
+	}
+}
+
 func (a *App) initializeDb() error {
 	dburl := "file:" + filepath.Join(a.configDir, defaultDbName)
 
@@ -107,6 +149,73 @@ func (a *App) initializeDb() error {
 	return nil
 }
 
+type clientInfoMsg struct {
+	row Optional[database.GetClientInfoRow]
+	newLogin bool
+	tokenExpired bool
+	expiresAt time.Time
+	err error
+}
+
+func (m clientInfoMsg) Err() error {
+	return m.err
+}
+
+func getClientInfoCmd(a *App) tea.Cmd {
+	return func() tea.Msg {
+		queries := database.New(a.db)
+
+		var clientInfoNotFound bool
+
+		row, err := queries.GetClientInfo(context.Background())
+
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				clientInfoNotFound = true
+			} else {
+				return clientInfoMsg{ err: err }
+			}
+		}
+
+		if clientInfoNotFound {
+			return clientInfoMsg {
+				newLogin: true,
+			}
+		}
+
+		msg := clientInfoMsg{
+			row: Optional[database.GetClientInfoRow]{
+				Value: row,
+				Valid: true,
+			},
+		}
+
+		if !row.AccessToken.Valid || !row.RefreshToken.Valid {
+			msg.newLogin = true
+			return msg
+		}
+
+		if row.AccessToken.String == "" || row.RefreshToken.String == "" {
+			msg.newLogin = true
+			return msg
+		}
+
+		expiresAt, err := time.Parse(time.UnixDate, row.ExpiresAt.String)
+
+		if err != nil {
+			return err
+		}
+
+		msg.expiresAt = expiresAt
+
+		if time.Now().Compare(expiresAt) >= 0 {
+			msg.tokenExpired = true
+		}
+
+		return msg
+	}
+}
+
 func (a *App) getClientInfo() error {
 	queries := database.New(a.db)
 
@@ -123,17 +232,7 @@ func (a *App) getClientInfo() error {
 	}
 
 	if clientInfoNotFound {
-		params := database.InsertConfigParams{
-			ClientID: a.ClientId(),
-			ClientSecret: a.ClientSecret(),
-			RedirectUri: a.RedirectUri(),
-			Authorized: false,
-		}
-
-		if err := queries.InsertConfig(context.Background(), params); err != nil {
-			return err
-		}
-
+		a.newLogin = true
 		return nil
 	}
 
@@ -261,10 +360,14 @@ type TrackInfo struct {
 }
 
 type App struct {
+	cli bool
+	spinner spinner.Model
 	mediaFocus bool
 	client *client.Client
 	authInfo AuthorizationInfo
 	user Optional[types.User]
+
+	loginModel loginModel
 
 	tokenExpired bool
 
@@ -277,6 +380,8 @@ type App struct {
 
 	err []error
 	state AppState
+
+	initInputs []textinput.Model
 
 	grid grid.Model
 	posMap map[string]grid.Position
@@ -605,15 +710,10 @@ func (a *App) AppendMessage(msg string) {
 	a.grid.SetModelPos(m, pos)
 }
 
-func New(clientId, clientSecret, redirectUri string) *App {
+func New() *App {
+	spinner := spinner.New()
 	dir := getConfigDir()
 	dburl := getDbUrl(dir)
-
-	auth := AuthorizationInfo{
-		clientId: clientId,
-		clientSecret: clientSecret,
-		redirectUri: redirectUri,
-	}
 
 	devices := NewList(nil)
 	devices.SetShowTitle(true)
@@ -687,9 +787,14 @@ func New(clientId, clientSecret, redirectUri string) *App {
 
 	progress := progress.New()
 	progress.ShowPercentage = false
+	client := client.New()
+
+	loginModel := newLoginModel()
 
 	return &App{
-		authInfo: auth,
+		spinner: spinner,
+		client: client,
+		loginModel: loginModel,
 		dbUrl: dburl,
 		configDir: dir,
 		title: "Go-Spotify",
@@ -697,6 +802,7 @@ func New(clientId, clientSecret, redirectUri string) *App {
 		typeMap: typeMap,
 		viewMap: viewMap,
 		viewMapKeys: viewMapKeys,
+		state: InitializationState,
 		//artists: artists,
 		//tracks: tracks,
 		//playlists: playlists,
@@ -726,28 +832,39 @@ func (a *App) Setup() error {
 	if err := a.initializeConfigDir(); err != nil {
 		return err
 	}
+	return nil
+}
 
+func (a *App) SetupCli() error {
 	if err := a.initializeDb(); err != nil {
 		return err
 	}
 
 	if err := a.getClientInfo(); err != nil {
+		return fmt.Errorf("client not validated got err: %v", err)
+	}
+
+	if a.newLogin {
+		return fmt.Errorf("use the tui to finish authentication")
+	}
+
+	if !a.tokenExpired {
+		return nil
+	}
+
+	ctx := defaultRefreshTokenCtx(a)
+	resp, err := a.client.RefreshToken(ctx)
+
+	if err != nil {
 		return err
 	}
 
-	a.client = client.New(a.ClientId(), a.ClientSecret(), a.RedirectUri())
-
-	if a.IsNewLogin() {
-		if err := a.authorizeClient(); err != nil {
-			return err
-		}
+	if err := a.updateRefreshToken(resp); err != nil {
+		return err
 	}
 
-	if a.IsTokenExpired() {
-		fmt.Println(a.AccessToken(), a.RefreshToken())
-		if err := a.refreshTokens(); err != nil {
-			return err
-		}
+	if err := a.updateConfigDb(a.GetAuthorizationInfo()); err != nil {
+		return err
 	}
 
 	return nil
@@ -838,6 +955,7 @@ type SetPlaybackVolumeResult struct{}
 type Shutdown struct{}
 
 type AppErr error
+type InitializationError error
 
 func ShutDownApp(a *App) tea.Cmd {
 	return func() tea.Msg {
@@ -865,6 +983,12 @@ func RenewRefreshTokenTick(a *App, auth AuthorizationInfo) tea.Cmd {
 	})
 }
 
+func RenewRefreshTokenCmd(a *App) tea.Cmd {
+	return func() tea.Msg {
+		return renewRefreshToken(a)
+	}
+}
+
 func renewRefreshToken(a *App) tea.Msg {
 	ctx := defaultRefreshTokenCtx(a)
 	resp, err := a.client.RefreshToken(ctx)
@@ -877,6 +1001,7 @@ func renewRefreshToken(a *App) tea.Msg {
 		result: resp,
 	}
 }
+
 
 func GetUserProfile(a *App) tea.Cmd {
 	return func() tea.Msg {
@@ -1194,9 +1319,36 @@ func GetSearchResultCmd(a *App, params client.GetSearchResultsParams) tea.Cmd {
 	}
 }
 
+type authorizeClientMsg struct {
+	resp *client.SpotifyAuthorizationResponse
+	err error
+}
+
+func (m authorizeClientMsg) Err() error {
+	return m.err
+}
+
+func AuthorizeClientCmd(a *App) tea.Cmd {
+	return func() tea.Msg {
+		ctx := defaultAuthorizationCtx(a)
+		resp, err := a.client.Authorize(ctx)
+
+		if err != nil {
+			return authorizeClientMsg{
+				err: err,
+			}
+		}
+
+		return authorizeClientMsg{
+			resp: resp,
+		}
+	}
+}
+
 
 func (a *App) authorizeClient() error {
-	resp, err := a.client.Authorize()
+	ctx := defaultAuthorizationCtx(a)
+	resp, err := a.client.Authorize(ctx)
 
 	if err != nil {
 		return err
@@ -1357,6 +1509,11 @@ func defaultAccessTokenCtx(a *App) context.Context {
 func defaultRefreshTokenCtx(a *App) context.Context {
 	auth := a.GetAuthorizationInfo()
 	return client.ContextWithClientInfo(context.Background(), auth.accessToken, auth.refreshToken, auth.clientId, auth.clientSecret)
+}
+
+func defaultAuthorizationCtx(a *App) context.Context {
+	auth := a.GetAuthorizationInfo()
+	return client.ContextWithAuthorization(context.Background(), auth.clientId, auth.clientSecret, auth.redirectUri)
 }
 
 func PlayerHandler(a *App) CliCommandHandler {

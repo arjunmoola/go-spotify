@@ -6,13 +6,14 @@ import (
 	"strings"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
-	nested "go-spotify/models/list"
+	"github.com/charmbracelet/bubbles/spinner"
+	nested "github.com/arjunmoola/go-spotify/models/list"
 	"github.com/charmbracelet/lipgloss"
-	"go-spotify/models/textinput"
-	"go-spotify/client"
-	"go-spotify/models/grid"
-	"go-spotify/types"
-	"go-spotify/models/media"
+	"github.com/arjunmoola/go-spotify/models/textinput"
+	"github.com/arjunmoola/go-spotify/client"
+	"github.com/arjunmoola/go-spotify/models/grid"
+	"github.com/arjunmoola/go-spotify/types"
+	"github.com/arjunmoola/go-spotify/models/media"
 )
 
 type Batch []tea.Cmd
@@ -31,6 +32,10 @@ func (b Batch) Cmd() tea.Cmd {
 }
 
 func (a *App) Init() tea.Cmd {
+	return tea.Batch(initializeDbCmd(a), a.spinner.Tick)
+}
+
+func (a *App) getSpotifyData() tea.Cmd {
 	var b Batch
 	b.Append(GetUsersTopTracks(a))
 	b.Append(GetUsersTopArtists(a))
@@ -67,10 +72,6 @@ func SetSideBarItems[S []T, T nested.Viewer](a *App, title string, s S) {
 func (a *App) updateResults(msg tea.Msg, b *Batch) {
 	push := b.Append
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		a.height = msg.Height
-		a.width = msg.Width
-		updateModelDims(a)
 	case GetSearchResults:
 		a.SetSearchResults(msg.result)
 		a.AppendMessage(fmt.Sprintf("received results. %d artitsts, %d tracks", msg.result.Artists.Total, msg.result.Tracks.Total))
@@ -306,6 +307,157 @@ func (a *App) setTextInputState(state textInputState) {
 	a.inputState = state
 }
 
+type errorMessage interface {
+	Err() error 
+}
+
+func (a *App) checkError(err errorMessage) bool {
+	if err := err.Err(); err != nil {
+		a.err = append(a.err, err)
+		return true
+	}
+	return false
+}
+
+func (a *App) updateInitialization(msg tea.Msg, b *Batch) bool {
+	if a.state == InitializationDone {
+		return true
+	}
+
+	push := b.Append
+
+	switch msg := msg.(type) {
+	case initializeDbMsg:
+		if a.checkError(msg) {
+			return false
+		}
+		a.db = msg.db
+		a.dbUrl = msg.dbUrl
+		push(getClientInfoCmd(a))
+	case RenewRefreshTokenResult:
+		if err := a.updateRefreshToken(msg.result); err != nil {
+			a.err = append(a.err, err)
+			break
+		}
+		push(
+			UpdateConfig(a, a.GetAuthorizationInfo()),
+			RenewRefreshTokenTick(a, a.GetAuthorizationInfo()),
+		)
+		a.state = InitializationDone
+	case clientInfoMsg:
+		if a.checkError(msg) {
+			break
+		}
+
+		if msg.newLogin {
+			a.newLogin = true
+			break
+		}
+		clientId := msg.row.Value.ClientID
+		clientSecret := msg.row.Value.ClientSecret
+		accessToken := msg.row.Value.AccessToken.String
+		refreshToken := msg.row.Value.RefreshToken.String
+
+		a.SetClientInfo(clientId, clientSecret)
+		a.SetAccessToken(accessToken)
+		a.SetRefreshToken(refreshToken)
+		
+		a.SetExpiresAt(msg.expiresAt)
+		
+		if msg.tokenExpired {
+			a.tokenExpired = true
+			push(RenewRefreshTokenCmd(a))
+			break
+		}
+
+		a.state = InitializationDone
+	case authorizeClientMsg:
+		if a.state != AuthorizingNewLogin {
+			break
+		}
+
+		if a.checkError(msg) {
+			return false
+		}
+
+		resp := msg.resp
+
+		a.SetExpiresAt(getExpiresAtTime(resp.ExpiresIn))
+		a.tokenExpired = false
+		a.SetAccessToken(resp.AccessToken)
+		a.SetRefreshToken(resp.RefreshToken)
+		push(UpdateConfig(a, a.GetAuthorizationInfo()))
+		a.state = InitializationDone
+	case spinner.TickMsg:
+	case tea.KeyMsg:
+		if !a.newLogin {
+			break
+		}
+
+		switch msg.String() {
+		case "enter":
+			cursor := a.loginModel.cursor
+
+			if cursor < len(a.loginModel.inputs) && !a.loginModel.focus {
+				push(a.loginModel.inputs[cursor].Input.Focus())
+				a.loginModel.focus = true
+			} else if cursor < len(a.loginModel.inputs) && a.loginModel.focus {
+				a.loginModel.cursor++
+				a.loginModel.cursor = min(a.loginModel.cursor, len(a.loginModel.inputs))
+
+				if a.loginModel.cursor < len(a.loginModel.inputs) {
+					a.loginModel.inputs[cursor].Input.Blur()
+					push(a.loginModel.inputs[a.loginModel.cursor].Input.Focus())
+				} else if a.loginModel.cursor == len(a.loginModel.inputs) {
+					var inputValues []string
+					var errMsgs []string
+
+					for i, input := range a.loginModel.inputs {
+						value := input.Input.Value()
+						inputValues = append(inputValues, value)
+						if value == "" {
+							errMsgs = append(errMsgs, "missing value for " + a.loginModel.labels[i])
+						}
+					}
+
+					if len(errMsgs) != 0 {
+						a.loginModel.errMsg = strings.Join(errMsgs, "\n")
+						break
+					}
+
+					authInfo := AuthorizationInfo{
+						clientId: inputValues[0],
+						clientSecret: inputValues[1],
+						redirectUri: inputValues[2],
+					}
+
+					a.SetAuthorizationInfo(authInfo)
+					push(AuthorizeClientCmd(a))
+					a.state = AuthorizingNewLogin
+				}
+			}
+		}
+	}
+
+	if a.state == InitializationDone {
+		push(a.getSpotifyData())
+		return true
+	}
+
+	if a.newLogin {
+		var cmd tea.Cmd
+		a.loginModel, cmd = a.loginModel.Update(msg)
+		push(cmd)
+		return false
+	}
+
+	var cmd tea.Cmd
+	a.spinner, cmd = a.spinner.Update(msg)
+	push(cmd)
+
+	return false
+}
+
 func (a *App) updateTextInput(msg tea.Msg, b *Batch) bool {
 	var inputActivated bool
 
@@ -400,6 +552,7 @@ func (a *App) update(msg tea.Msg, b *Batch) {
 		case "ctrl+r":
 			push(GetCurrentlyPlayingCmd(a))
 			push(GetUsersQueueCmd(a))
+			push(GetAvailableDevices(a))
 			a.AppendMessage("retrying getCurrentlyPlaying")
 		case "up", "down":
 			//push(updatePlaybackVolume(a, key))
@@ -603,6 +756,10 @@ func (a *App) update(msg tea.Msg, b *Batch) {
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.height = msg.Height
+		a.width = msg.Width
+		updateModelDims(a)
 	case Shutdown:
 		a.db.Close()
 		return a, tea.Quit
@@ -618,6 +775,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var b Batch
+
+	if !a.updateInitialization(msg, &b) {
+		return a, b.Cmd()
+	}
 
 	a.updateResults(msg, &b)
 	inputActivated := a.updateTextInput(msg, &b)
@@ -915,6 +1076,32 @@ func (a *App) viewActiveDevice() string {
 }
 
 func (a *App) View() string {
+	if a.state != InitializationDone && a.newLogin {
+		return a.loginModel.View()
+	}
+
+	if a.state == AuthorizingNewLogin && a.newLogin {
+		s := "Authorizing client credentials\n"
+		s +=  a.spinner.View()
+		return s
+	}
+
+	if a.state == InitializationErrState {
+		var s string
+
+		for _, err := range a.err {
+			s += err.Error() + "\n"
+		}
+
+		return s
+	}
+
+	if a.state == InitializationState {
+		s := "checking client credentials\n"
+		s += a.spinner.View()
+		return s
+	}
+
 	titleView :=  a.styles.title.Width(a.width).Align(lipgloss.Center).Render(a.title)
 	infoView := a.styles.infoStyle.Width(a.width).Render(a.currentlyPlayingArtistView())
 	gridView := a.styles.gridStyle.Render(a.grid.View())
