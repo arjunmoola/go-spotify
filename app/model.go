@@ -414,33 +414,34 @@ func (a *App) updateInitialization(msg tea.Msg, b *Batch) bool {
 				if a.loginModel.cursor < len(a.loginModel.inputs) {
 					a.loginModel.inputs[cursor].Input.Blur()
 					push(a.loginModel.inputs[a.loginModel.cursor].Input.Focus())
-				} else if a.loginModel.cursor == len(a.loginModel.inputs) {
-					var inputValues []string
-					var errMsgs []string
-
-					for i, input := range a.loginModel.inputs {
-						value := input.Input.Value()
-						inputValues = append(inputValues, value)
-						if value == "" {
-							errMsgs = append(errMsgs, "missing value for " + a.loginModel.labels[i])
-						}
-					}
-
-					if len(errMsgs) != 0 {
-						a.loginModel.errMsg = strings.Join(errMsgs, "\n")
-						break
-					}
-
-					authInfo := AuthorizationInfo{
-						clientId: inputValues[0],
-						clientSecret: inputValues[1],
-						redirectUri: inputValues[2],
-					}
-
-					a.SetAuthorizationInfo(authInfo)
-					push(AuthorizeClientCmd(a))
-					a.state = AuthorizingNewLogin
 				}
+			} else if a.loginModel.cursor == len(a.loginModel.inputs) {
+
+				var inputValues []string
+				var errMsgs []string
+
+				for i, input := range a.loginModel.inputs {
+					value := input.Input.Value()
+					inputValues = append(inputValues, value)
+					if value == "" {
+						errMsgs = append(errMsgs, "missing value for " + a.loginModel.labels[i])
+					}
+				}
+
+				if len(errMsgs) != 0 {
+					a.loginModel.errMsg = strings.Join(errMsgs, "\n")
+					return false
+				}
+
+				authInfo := AuthorizationInfo{
+					clientId: inputValues[0],
+					clientSecret: inputValues[1],
+					redirectUri: inputValues[2],
+				}
+
+				a.SetAuthorizationInfo(authInfo)
+				push(AuthorizeClientCmd(a))
+				a.state = AuthorizingNewLogin
 			}
 		}
 	}
