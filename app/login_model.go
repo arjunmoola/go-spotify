@@ -90,14 +90,18 @@ func newLoginModel() loginModel {
 
 	inputs[0] = textinput.New()
 	inputs[0].Input.Placeholder = "Client Id"
+	inputs[0].Input.Width = 50
 	labels[0] = "clientId"
+	
 
 	inputs[1] = textinput.New()
 	inputs[1].Input.Placeholder = "Client Secret"
+	inputs[1].Input.Width = 50
 	labels[1] = "clientSecret"
 
 	inputs[2] = textinput.New()
 	inputs[2].Input.Placeholder = "Redirect Uri"
+	inputs[2].Input.Width = 50
 	labels[2] = "redirectUri"
 
 	button := newButton("done")

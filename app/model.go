@@ -250,8 +250,9 @@ func updateMediaInfo(a *App) {
 
 func updateModelDims(a *App) {
 
-	for _, input := range a.loginModel.inputs {
+	for i, input := range a.loginModel.inputs {
 		input.Input.Width = a.width/2
+		a.loginModel.inputs[i] = input
 	}
 
 	sideBar, _ := GetModel[nested.NestedList](a, "sidebar")
