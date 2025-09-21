@@ -126,6 +126,12 @@ func (m loginModel) Update(msg tea.Msg) (loginModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "k":
+			prevCursor := m.cursor
+
+			if prevCursor == len(m.inputs) {
+				m.doneButton.focus = false
+			}
+
 			m.cursor--
 			m.cursor = max(m.cursor, 0)
 		case "j":

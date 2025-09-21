@@ -430,7 +430,7 @@ func (a *App) updateInitialization(msg tea.Msg, b *Batch) bool {
 
 				if len(errMsgs) != 0 {
 					a.loginModel.errMsg = strings.Join(errMsgs, "\n")
-					return false
+					break
 				}
 
 				authInfo := AuthorizationInfo{
