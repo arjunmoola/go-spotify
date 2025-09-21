@@ -249,6 +249,11 @@ func updateMediaInfo(a *App) {
 }
 
 func updateModelDims(a *App) {
+
+	for _, input := range a.loginModel.inputs {
+		input.Input.Width = a.width/2
+	}
+
 	sideBar, _ := GetModel[nested.NestedList](a, "sidebar")
 	sideBar.SetWidth(int(float64(a.width)*0.2))
 	sideBar.SetHeight(a.height/3)
@@ -768,9 +773,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return a, ShutDownApp(a)
 		case "esc":
+
+			if a.loginModel.focus {
+				a.loginModel.focus = false
+				cursor := a.loginModel.cursor
+				a.loginModel.inputs[cursor].Input.Blur()
+				break
+			}
+
 			if !a.grid.Focus() {
 				return a, tea.Quit
 			}
+			
 		}
 	}
 
