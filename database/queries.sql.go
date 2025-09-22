@@ -40,7 +40,7 @@ func (q *Queries) GetClientInfo(ctx context.Context) (GetClientInfoRow, error) {
 }
 
 const insertConfig = `-- name: InsertConfig :exec
-INSERT INTO config (client_secret, client_id, redirect_uri, authorized) VALUES (?, ?, ?, ?)
+INSERT INTO config (client_secret, client_id, redirect_uri, authorized, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertConfigParams struct {
@@ -48,6 +48,9 @@ type InsertConfigParams struct {
 	ClientID     string
 	RedirectUri  string
 	Authorized   bool
+	AccessToken  sql.NullString
+	RefreshToken sql.NullString
+	ExpiresAt    sql.NullString
 }
 
 func (q *Queries) InsertConfig(ctx context.Context, arg InsertConfigParams) error {
@@ -56,6 +59,9 @@ func (q *Queries) InsertConfig(ctx context.Context, arg InsertConfigParams) erro
 		arg.ClientID,
 		arg.RedirectUri,
 		arg.Authorized,
+		arg.AccessToken,
+		arg.RefreshToken,
+		arg.ExpiresAt,
 	)
 	return err
 }

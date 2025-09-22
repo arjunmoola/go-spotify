@@ -32,6 +32,11 @@ var authInfoKey string = "auth_info"
 var ctxValueKey contextTypeKey = "context_val"
 var authorizationKey string = "authorization"
 
+func getContextValue(ctx context.Context) (contextValue, bool) {
+	v, ok := ctx.Value(ctxValueKey).(contextValue)
+	return v, ok
+}
+
 
 func WithAccessToken(ctx context.Context, accessToken string) context.Context {
 	val := contextValue{
@@ -59,7 +64,7 @@ func ContextWithAuthorization(ctx context.Context, clientId string, clientSecret
 func getAuthorization(ctx context.Context) (authInfo, error) {
 	var zero authInfo
 
-	v, ok := ctx.Value(authorizationKey).(contextValue)
+	v, ok := getContextValue(ctx)
 
 	if !ok {
 		return zero, ErrAuthInfoNotFound

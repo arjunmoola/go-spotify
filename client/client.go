@@ -9,14 +9,21 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/base64"
-	"log"
 	"net/url"
 	"net/http"
+	//"net"
 	"time"
 	"fmt"
 	"crypto/rand"
 	"bytes"
+	"log/slog"
 )
+
+var logger *slog.Logger
+
+func SetupLogger(l *slog.Logger) {
+	logger = l.WithGroup("client")
+}
 
 const defaultLimitRate = time.Millisecond*100
 
@@ -71,6 +78,23 @@ type Client struct {
 	requestCh chan any
 	retryCh chan any
 	close chan struct{}
+
+	urlCh chan string
+}
+
+func (c *Client) GetSpotifyAuthUrl(ctx context.Context) (string, error) {
+	if c.urlCh == nil {
+		return "", fmt.Errorf("unexpected call. can only be called during initial authorization")
+	}
+
+	var authUrl string
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case authUrl = <- c.urlCh:
+	}
+
+	return authUrl, nil
 }
 
 
@@ -81,10 +105,12 @@ func New() *Client {
 		requestCh: make(chan any, 256),
 		retryCh: make(chan any),
 		client: &http.Client{},
+		urlCh: make(chan string, 1),
 	}
 
 	return client
 }
+
 
 func (c *Client) run() {
 	ticker := time.NewTicker(c.limitRate)
@@ -107,14 +133,51 @@ func (c *Client) Close() {
 	close(c.close)
 }
 
+func (c *Client) log(ctx context.Context, level slog.Level, msg string, args ...slog.Attr) {
+	logger.LogAttrs(ctx, level, msg, args...)
+}
+
+func verifyProvidedClientInfo(clientInfo authInfo) error {
+	var msgs []string
+
+	if clientInfo.clientId == "" {
+		msgs = append(msgs, "provided client id is invalid")
+	}
+
+	if clientInfo.clientSecret == "" {
+		msgs = append(msgs, "provided client secret is invalid")
+	}
+
+	if clientInfo.redirectUri == "" {
+		msgs = append(msgs, "provided redirect uri is invalid")
+	}
+
+	if len(msgs) == 0 {
+		return nil
+	}
+
+	errMsg := strings.Join(msgs, ", ")
+
+	return fmt.Errorf("%v", errMsg)
+}
+
 func (c *Client) Authorize(ctx context.Context) (*SpotifyAuthorizationResponse, error) {
+	logger.Debug("authorizing client")
 	defer func() {
-		log.Println("returing from Authorize")
+		logger.Debug("finished authorizing client")
 	}()
+
 
 	clientInfo, err := getAuthorization(ctx)
 
 	if err != nil {
+		return nil, fmt.Errorf("unable to get client info from provided context. got %v", err)
+	}
+
+	logger.Debug("retrieved client info from provided context")
+
+	if err := verifyProvidedClientInfo(clientInfo); err != nil {
+		logger.Error("invalid client Info provided", "error", err.Error())
 		return nil, err
 	}
 
@@ -122,19 +185,26 @@ func (c *Client) Authorize(ctx context.Context) (*SpotifyAuthorizationResponse, 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", callbackHandler(c, clientInfo, respCh))
 
+	u, err := url.Parse(clientInfo.redirectUri)
+
+	if err != nil {
+		logger.Error("unable to parse url", "error", err.Error())
+		return nil, err
+	}
+
 	s := &http.Server{
-		Addr: clientInfo.redirectUri,
+		Addr: u.Host,
 		Handler: mux,
 	}
 
 	go func() {
-		log.Println("listening of redirect uri")
+		logger.Debug("listening to callback request", "addr", u.String())
 		if err := s.ListenAndServe(); err != nil {
 			if errors.Is(err, http.ErrServerClosed) {
-				return
+				logger.Debug("authorization server closed")
+			} else {
+				logger.Error("unexpected error occured", "error", err.Error())
 			}
-
-			log.Println(err)
 		}
 	}()
 
@@ -142,7 +212,7 @@ func (c *Client) Authorize(ctx context.Context) (*SpotifyAuthorizationResponse, 
 
 	<-time.After(50*time.Millisecond)
 
-	if err := c.authorize(ctx); err != nil {
+	if err := c.authorize(ctx, clientInfo); err != nil {
 		return nil, err
 	}
 
@@ -152,14 +222,108 @@ func (c *Client) Authorize(ctx context.Context) (*SpotifyAuthorizationResponse, 
 
 	var resp *SpotifyAuthorizationResponse
 
-	log.Println("waiting for response")
+	logger.Debug("waiting for response")
+
 	select {
 	case <-ctx.Done():
+		logger.Warn("context timed out")
 		return nil, ctx.Err()
 	case resp = <-respCh:
 	}
 
 	return resp, nil
+}
+
+func (c *Client) authorize(ctx context.Context, clientInfo authInfo) error {
+	logger.Debug("sending authorization request", "func", "authorize")
+
+	u, err := url.Parse(spotifyAuthorizationUrl)
+	
+	if err != nil {
+		return err
+	}
+
+	scope := getAppScope()
+	values := newUrlValues()
+	values.setResponseType("code")
+	values.setClientId(clientInfo.clientId)
+	values.setScope(scope)
+	values.setRedirectUri(clientInfo.redirectUri)
+	values.setState(c.state)
+
+	values.encode(u)
+
+	logger.Debug("spotify auth url", "url", u.String())
+
+	c.urlCh <- u.String()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+
+	if err != nil {
+		return err
+	}
+
+	if err := fetchResponse(c, req, nil); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func callbackHandler(c *Client, info authInfo, respCh chan *SpotifyAuthorizationResponse) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger.Debug("handling callback: received callback request from spotify")
+		logger.Debug("callback handler", "request_url", r.URL.String())
+
+		values := r.URL.Query()
+
+		code := values.Get("code")
+		state := values.Get("state")
+		error := values.Get("error")
+
+		if error != "" {
+			logger.Error("received error", "error", error)
+			return
+		}
+
+		if state != c.state {
+			logger.Error("incorrect state", "received", state, "expected", c.state)
+			return
+		}
+
+		if code == "" {
+			logger.Error("did not receive code")
+			return
+		}
+
+		vals := newUrlValues()
+		vals.setGrantType("authorization_code")
+		vals.setCode(code)
+		vals.setRedirectUri(info.redirectUri)
+		buf := vals.encodeToBuffer()
+
+		encodedClientInfo := encodeClientInfo(info.clientId, info.clientSecret)
+
+		reqFactory := newRequestFactory(http.MethodPost, spotifyTokenUrl, buf)
+		reqFactory.setAuthorization(encodedClientInfo)
+		reqFactory.setContentType(contentTypeUrlEncoded)
+
+		req, err := reqFactory.newRequestWithContext(context.Background())
+
+		if err != nil { 
+			logger.Error("request factory error", "error", err.Error())
+			return
+		}
+
+		authorizationResp := SpotifyAuthorizationResponse{}
+
+		if err := fetchResponse(c, req, &authorizationResp); err != nil {
+			logger.Error("unable to fetch response", "error", err.Error())
+			return
+		}
+
+		respCh <- &authorizationResp
+	}
 }
 
 type urlValues struct {
@@ -333,45 +497,6 @@ func (h *requestFactory) newRequestWithContext(ctx context.Context) (*http.Reque
 	return req, err
 }
 
-func (c *Client) authorize(ctx context.Context) error {
-	log.Println("sending authorization request")
-
-	authInfo, err := getAuthorization(ctx)
-
-	if err != nil {
-		return err
-	}
-
-	u, err := url.Parse(spotifyAuthorizationUrl)
-	
-	if err != nil {
-		return err
-	}
-
-	fmt.Println(c.redirectUri)
-
-	scope := getAppScope()
-	values := newUrlValues()
-	values.setResponseType("code")
-	values.setClientId(authInfo.clientId)
-	values.setScope(scope)
-	values.setRedirectUri(authInfo.redirectUri)
-	values.setState(c.state)
-
-	values.encode(u)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
-
-	if err != nil {
-		return err
-	}
-
-	if err := fetchResponse(c, req, nil); err != nil {
-		return err
-	}
-
-	return nil
-}
 
 type SpotifyAuthorizationResponse struct {
 	AccessToken string `json:"access_token"`
@@ -389,59 +514,6 @@ type SpotifyRefreshTokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-func callbackHandler(c *Client, info authInfo, respCh chan *SpotifyAuthorizationResponse) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Println("received callback request from spotify")
-		values := r.URL.Query()
-
-		code := values.Get("code")
-		state := values.Get("state")
-		error := values.Get("error")
-
-		if error != "" {
-			log.Println(error)
-			return
-		}
-
-		if state != c.state {
-			log.Println("incorrect state")
-			return
-		}
-
-		if code == "" {
-			log.Println("did not get code")
-			return
-		}
-
-		vals := newUrlValues()
-		vals.setGrantType("authorization_code")
-		vals.setCode(code)
-		vals.setRedirectUri(info.redirectUri)
-		buf := vals.encodeToBuffer()
-
-		encodedClientInfo := encodeClientInfo(info.clientId, info.clientSecret)
-
-		reqFactory := newRequestFactory(http.MethodPost, spotifyTokenUrl, buf)
-		reqFactory.setAuthorization(encodedClientInfo)
-		reqFactory.setContentType(contentTypeUrlEncoded)
-
-		req, err := reqFactory.newRequestWithContext(context.Background())
-
-		if err != nil { 
-			log.Println(err)
-			return
-		}
-
-		authorizationResp := SpotifyAuthorizationResponse{}
-
-		if err := fetchResponse(c, req, &authorizationResp); err != nil {
-			log.Println(err)
-			return
-		}
-
-		respCh <- &authorizationResp
-	}
-}
 
 
 func (c *Client) RefreshToken(ctx context.Context) (types.SpotifyRefreshTokenResponse, error) {

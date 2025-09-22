@@ -2,6 +2,8 @@ package main
 
 import (
 	"github.com/arjunmoola/go-spotify/app"
+	"github.com/arjunmoola/go-spotify/utils"
+
 	"log"
 	"os"
 )
@@ -23,11 +25,28 @@ func runCli(commands *app.CliCommands) error {
 }
 
 func main() {
-	a := app.New()
-
-	if err := a.Setup(); err != nil {
+	if err := utils.InitializeConfigDir(); err != nil {
 		log.Fatal(err)
 	}
+
+	logFile, err := utils.OpenLogFile()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer logFile.Close()
+
+	logger := utils.NewLogger(logFile)
+	app.SetupLogger(logger)
+
+	db, err := utils.InitializeDB()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	a := app.New(db)
 
 	cli := app.NewCliCommands(a)
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
+	//"github.com/charmbracelet/bubbles/spinner"
 	nested "github.com/arjunmoola/go-spotify/models/list"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/arjunmoola/go-spotify/models/textinput"
@@ -32,7 +32,7 @@ func (b Batch) Cmd() tea.Cmd {
 }
 
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(initializeDbCmd(a), a.spinner.Tick)
+	return tea.Batch(getClientInfoCmd(a), a.spinner.Tick)
 }
 
 func (a *App) getSpotifyData() tea.Cmd {
@@ -70,6 +70,8 @@ func SetSideBarItems[S []T, T nested.Viewer](a *App, title string, s S) {
 }
 
 func (a *App) updateResults(msg tea.Msg, b *Batch) {
+	logger.Debug("received events", "func", "updateResults", "application_state", a.state)
+
 	push := b.Append
 	switch msg := msg.(type) {
 	case GetSearchResults:
@@ -137,9 +139,18 @@ func (a *App) updateResults(msg tea.Msg, b *Batch) {
 			}
 		}
 	case AuthorizationResponse:
+	case InsertAuthInfoResult:
+		if a.checkError(msg) {
+			logger.Error("unable to insert client info in database", "error", msg.Err())
+			break
+		}
+		logger.Debug("client info successfully added to database")
 	case UpdateConfigResult:
-		a.AppendMessage("config updated")
-		a.msgs = append(a.msgs, "config updated")
+		if a.checkError(msg) {
+			logger.Error("unable to update config", "error", msg.Err())
+			break
+		}
+		logger.Debug("config updated") 
 	case RenewRefreshTokenResult:
 		if err := a.updateRefreshToken(msg.result); err != nil {
 			a.err = append(a.err, err)
@@ -319,13 +330,60 @@ type errorMessage interface {
 
 func (a *App) checkError(err errorMessage) bool {
 	if err := err.Err(); err != nil {
+		logger.Error("received error message", "error", err)
 		a.err = append(a.err, err)
 		return true
 	}
 	return false
 }
 
+func processClientInitializationInput(a *App, b *Batch) {
+	logger.Debug("processing client initialization input")
+	var inputValues []string
+	var errMsgs []string
+
+	for i, input := range a.loginModel.inputs {
+		value := input.Input.Value()
+		inputValues = append(inputValues, value)
+		if value == "" {
+			errMsgs = append(errMsgs, "missing value for " + a.loginModel.labels[i])
+		}
+	}
+
+	if len(errMsgs) != 0 {
+		a.state = InitializationErrState
+		errMsg := strings.Join(errMsgs, "\n")
+		logger.Error("input error", "error", errMsg)
+		return
+	}
+
+	authInfo := AuthorizationInfo{
+		clientId: inputValues[0],
+		clientSecret: inputValues[1],
+		redirectUri: inputValues[2],
+	}
+
+	logger.Debug("client inputs", "application_state", a.state.String(), "clientId", authInfo.clientId, "clientSecret", authInfo.clientSecret, "redirectUri", authInfo.redirectUri)
+
+	a.SetAuthorizationInfo(authInfo)
+	b.Append(AuthorizeClientCmd(a))
+	b.Append(GetSpotifyAuthUrlCmd(a))
+	a.setState(AuthorizingNewLogin)
+}
+
+func (a *App) setState(state AppState) {
+	if a.state == state {
+		return
+	}
+	curState := a.state
+	a.state = state
+	logger.Debug("state changed", "previous_state", curState.String(), "new_state", a.state.String())
+}
+
+
 func (a *App) updateInitialization(msg tea.Msg, b *Batch) bool {
+	logger.Debug("received events", "func", "updateInitialization",  "application_state", a.state.String())
+
 	if a.state == InitializationDone {
 		return true
 	}
@@ -334,6 +392,7 @@ func (a *App) updateInitialization(msg tea.Msg, b *Batch) bool {
 
 	switch msg := msg.(type) {
 	case initializeDbMsg:
+		logger.Debug("received event", "event", "initializeDbMsg")
 		if a.checkError(msg) {
 			return false
 		}
@@ -341,7 +400,9 @@ func (a *App) updateInitialization(msg tea.Msg, b *Batch) bool {
 		a.dbUrl = msg.dbUrl
 		push(getClientInfoCmd(a))
 	case RenewRefreshTokenResult:
+		logger.Debug("received event", "event", "RenewRefreshTokenResult")
 		if err := a.updateRefreshToken(msg.result); err != nil {
+			logger.Error("unable to update refresh token", "error", err)
 			a.err = append(a.err, err)
 			break
 		}
@@ -349,16 +410,21 @@ func (a *App) updateInitialization(msg tea.Msg, b *Batch) bool {
 			UpdateConfig(a, a.GetAuthorizationInfo()),
 			RenewRefreshTokenTick(a, a.GetAuthorizationInfo()),
 		)
-		a.state = InitializationDone
+		a.setState(InitializationDone)
 	case clientInfoMsg:
+		logger.Debug("received event", "event", "clientInfoMsg")
+
 		if a.checkError(msg) {
 			break
 		}
 
 		if msg.newLogin {
+			logger.Debug("clientInfoMsg", "result", "new login")
+			a.setState(NewLogin)
 			a.newLogin = true
 			break
 		}
+
 		clientId := msg.row.Value.ClientID
 		clientSecret := msg.row.Value.ClientSecret
 		accessToken := msg.row.Value.AccessToken.String
@@ -369,89 +435,77 @@ func (a *App) updateInitialization(msg tea.Msg, b *Batch) bool {
 		a.SetRefreshToken(refreshToken)
 		
 		a.SetExpiresAt(msg.expiresAt)
-		
+
+		logger.Debug("client info", "clientId", clientId, "clientSecret", clientSecret, "accessToken", accessToken, "refreshToken", refreshToken, "expiresAt", msg.expiresAt.String())
+
 		if msg.tokenExpired {
 			a.tokenExpired = true
 			push(RenewRefreshTokenCmd(a))
 			break
 		}
-
-		a.state = InitializationDone
-	case authorizeClientMsg:
-		if a.state != AuthorizingNewLogin {
+		a.setState(InitializationDone)
+	case GetSpotifyAuthUrlResult:
+		if a.checkError(msg) {
+			logger.Error("unable to receive auth url", "error", msg.err.Error())
 			break
 		}
+		a.spotifyAuthUrl = Optional[string]{
+			Value: msg.result,
+			Valid: true,
+		}
+	case authorizeClientMsg:
+		logger.Debug("received event", "event", "authorizeClientMsg")
 
 		if a.checkError(msg) {
+			a.setState(NewLogin)
 			return false
 		}
 
 		resp := msg.resp
-
 		a.SetExpiresAt(getExpiresAtTime(resp.ExpiresIn))
 		a.tokenExpired = false
 		a.SetAccessToken(resp.AccessToken)
 		a.SetRefreshToken(resp.RefreshToken)
-		push(UpdateConfig(a, a.GetAuthorizationInfo()))
-		a.state = InitializationDone
-	case spinner.TickMsg:
+
+		logger.Debug("authorize client message response", "accessToken", resp.AccessToken, "refreshToken", resp.RefreshToken)
+		push(InsertAuthInfoCmd(a, a.GetAuthorizationInfo()))
+		a.setState(InitializationDone)
 	case tea.KeyMsg:
-		if !a.newLogin {
+		logger.Debug("received event", "event", "tea.KeyMsg")
+		if !a.isState(NewLogin) {
 			break
 		}
 
 		switch msg.String() {
 		case "enter":
+			logger.Debug("key message event", "key", "enter")
+
 			cursor := a.loginModel.cursor
 
 			if cursor < len(a.loginModel.inputs) && !a.loginModel.focus {
 				push(a.loginModel.inputs[cursor].Input.Focus())
 				a.loginModel.focus = true
 			} else if cursor < len(a.loginModel.inputs) && a.loginModel.focus {
+				a.loginModel.inputs[cursor].Input.Blur()
 				a.loginModel.cursor++
 				a.loginModel.cursor = min(a.loginModel.cursor, len(a.loginModel.inputs))
-
 				if a.loginModel.cursor < len(a.loginModel.inputs) {
-					a.loginModel.inputs[cursor].Input.Blur()
 					push(a.loginModel.inputs[a.loginModel.cursor].Input.Focus())
+				} else if a.loginModel.cursor == len(a.loginModel.inputs) {
+					a.loginModel.doneButton.focus = true
 				}
-			} else if a.loginModel.cursor == len(a.loginModel.inputs) {
-
-				var inputValues []string
-				var errMsgs []string
-
-				for i, input := range a.loginModel.inputs {
-					value := input.Input.Value()
-					inputValues = append(inputValues, value)
-					if value == "" {
-						errMsgs = append(errMsgs, "missing value for " + a.loginModel.labels[i])
-					}
-				}
-
-				if len(errMsgs) != 0 {
-					a.loginModel.errMsg = strings.Join(errMsgs, "\n")
-					break
-				}
-
-				authInfo := AuthorizationInfo{
-					clientId: inputValues[0],
-					clientSecret: inputValues[1],
-					redirectUri: inputValues[2],
-				}
-
-				a.SetAuthorizationInfo(authInfo)
-				push(AuthorizeClientCmd(a))
-				a.state = AuthorizingNewLogin
+			} else if cursor == len(a.loginModel.inputs) {
+				processClientInitializationInput(a, b)
 			}
 		}
 	}
 
-	if a.state == InitializationDone {
+	if a.isState(InitializationDone) {
 		push(a.getSpotifyData())
 		return true
 	}
 
-	if a.newLogin {
+	if a.isState(NewLogin) && a.loginModel.cursor <= len(a.loginModel.inputs) {
 		var cmd tea.Cmd
 		a.loginModel, cmd = a.loginModel.Update(msg)
 		push(cmd)
@@ -768,6 +822,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width = msg.Width
 		updateModelDims(a)
 	case Shutdown:
+		logger.Debug("received shutdown message")
 		a.db.Close()
 		return a, tea.Quit
 	case tea.KeyMsg:
@@ -779,8 +834,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.loginModel.focus {
 				a.loginModel.focus = false
 				cursor := a.loginModel.cursor
-				a.loginModel.inputs[cursor].Input.Blur()
-				break
+
+				if cursor < len(a.loginModel.inputs) {
+					a.loginModel.inputs[cursor].Input.Blur()
+					break
+				}
 			}
 
 			if !a.grid.Focus() {
@@ -1092,15 +1150,44 @@ func (a *App) viewActiveDevice() string {
 }
 
 func (a *App) View() string {
-	if a.state != InitializationDone && a.newLogin {
+	if a.isState(NewLogin) {
 		return a.loginModel.View()
 	}
 
-	if a.state == AuthorizingNewLogin && a.newLogin {
+	if a.isState(AuthorizingNewLogin) && a.newLogin {
+		var authUrl string
+
+		if a.spotifyAuthUrl.Valid {
+			authUrl = a.spotifyAuthUrl.Value
+		}
 		s := "Authorizing client credentials\n"
+
+		if authUrl != "" {
+			urlView := lipgloss.NewStyle().Width(a.width).Foreground(lipgloss.Color("green"))
+			s += "go to the following url:\n"
+			s += urlView.Render(fmt.Sprintf("%s\n", authUrl))
+		}
+
 		s +=  a.spinner.View()
 		return s
 	}
+
+	if a.isState(InitializationErrState) && a.newLogin {
+		s := a.loginModel.View()
+
+		s += fmt.Sprintf("%v\n", a.GetAuthorizationInfo())
+
+		var errMsgs string
+
+		for _, err := range a.err {
+			errMsgs += err.Error() + "\n"
+		}
+
+		s += "\n" + errMsgs
+
+		return s
+	}
+
 
 	if a.state == InitializationErrState {
 		var s string

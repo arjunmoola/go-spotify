@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 	"log"
+	"log/slog"
 	"context"
 	"database/sql"
 	"github.com/arjunmoola/go-spotify/types"
@@ -29,6 +30,9 @@ import (
 	"os"
 )
 
+var logger *slog.Logger
+var updateLogger *slog.Logger
+
 type AppState int
 
 const (
@@ -36,8 +40,28 @@ const (
 	InitializationErrState
 	AuthorizingNewLogin
 	InitializationDone
+	NewLogin
 	Menu
 )
+
+func (state AppState) String() string {
+	var s string
+	switch state {
+	case InitializationState:
+		s = "InitializationState"
+	case InitializationErrState:
+		s = "InitializatinErrState"
+	case AuthorizingNewLogin:
+		s = "AuthorizingNewLogin"
+	case InitializationDone:
+		s = "InitializationDone"
+	case NewLogin:
+		s = "NewLogin"
+	case Menu:
+		s = "Menu"
+	}
+	return s
+}
 
 var debug bool = true
 var ddl string
@@ -82,6 +106,23 @@ func (a *App) initializeConfigDir() error {
 		return os.Mkdir(a.configDir, 0777)
 	}
 
+	return nil
+}
+
+func (a *App) initializeLogger() error {
+
+	logFilePath := filepath.Join(a.configDir, "log")
+
+	file, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+
+	if err != nil {
+		return err
+	}
+
+	a.logger = slog.New(slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	slog.SetDefault(a.logger)
+	log.Println("hello world")
+	
 	return nil
 }
 
@@ -163,6 +204,8 @@ func (m clientInfoMsg) Err() error {
 
 func getClientInfoCmd(a *App) tea.Cmd {
 	return func() tea.Msg {
+		logger.Debug("retrieving client info")
+
 		queries := database.New(a.db)
 
 		var clientInfoNotFound bool
@@ -359,7 +402,14 @@ type TrackInfo struct {
 	trackType string
 }
 
+func (a *App) isState(state AppState) bool {
+	return a.state == state
+}
+
 type App struct {
+	spotifyAuthUrl Optional[string]
+	logFile *os.File
+	logger *slog.Logger
 	cli bool
 	spinner spinner.Model
 	mediaFocus bool
@@ -368,6 +418,7 @@ type App struct {
 	user Optional[types.User]
 
 	loginModel loginModel
+	inputValues []string
 
 	tokenExpired bool
 
@@ -710,7 +761,8 @@ func (a *App) AppendMessage(msg string) {
 	a.grid.SetModelPos(m, pos)
 }
 
-func New() *App {
+func New(db *sql.DB) *App {
+	logger.Info("New App")
 	spinner := spinner.New()
 	dir := getConfigDir()
 	dburl := getDbUrl(dir)
@@ -792,6 +844,7 @@ func New() *App {
 	loginModel := newLoginModel()
 
 	return &App{
+		db: db,
 		spinner: spinner,
 		client: client,
 		loginModel: loginModel,
@@ -828,11 +881,9 @@ func (a *App) IsNewLogin() bool {
 	return a.authInfo.accessToken == "" || a.authInfo.refreshToken == ""
 }
 
-func (a *App) Setup() error {
-	if err := a.initializeConfigDir(); err != nil {
-		return err
-	}
-	return nil
+func SetupLogger(l *slog.Logger)  {
+	logger = l.WithGroup("app")
+	client.SetupLogger(l)
 }
 
 func (a *App) SetupCli() error {
@@ -869,6 +920,19 @@ func (a *App) SetupCli() error {
 
 	return nil
 
+}
+
+type AppEvent interface {
+	name() string
+}
+
+type GetSpotifyAuthUrlResult struct {
+	result string
+	err error
+}
+
+func (r GetSpotifyAuthUrlResult) Err() error {
+	return r.err
 }
 
 type GetUserResult struct {
@@ -931,10 +995,28 @@ type GetUsersCurrentSessionResult struct {
 
 type GetCurrentlyPlayingEpisodeResult struct {}
 
-type UpdateConfigResult struct {}
+type UpdateConfigResult struct {
+	err error
+}
+
+type InsertAuthInfoResult struct {
+	err error
+}
+
+func (r InsertAuthInfoResult) Err() error {
+	return r.err
+}
+
+func (r UpdateConfigResult) Err() error {
+	return r.err
+}
 
 type RenewRefreshTokenResult struct {
 	result types.SpotifyRefreshTokenResponse
+}
+
+func (r RenewRefreshTokenResult) name() string {
+	return "RenewRefreshTokenResult"
 }
 
 type AddItemsToPlaylistResult struct {
@@ -963,17 +1045,41 @@ func ShutDownApp(a *App) tea.Cmd {
 	}
 }
 
+func GetSpotifyAuthUrlCmd(a *App) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		authUrl, err := a.client.GetSpotifyAuthUrl(ctx)
+
+		if err != nil {
+			return GetSpotifyAuthUrlResult{
+				err: err,
+			}
+		}
+
+		return GetSpotifyAuthUrlResult{
+			result: authUrl,
+		}
+	}
+}
+
 func UpdateConfig(a *App, auth AuthorizationInfo) tea.Cmd {
 	return func() tea.Msg {
 		err := a.updateConfigDb(auth)
-
-		if err != nil {
-			return AppErr(err)
+		return UpdateConfigResult{
+			err: err,
 		}
-
-		return UpdateConfigResult {}
 	}
+}
 
+func InsertAuthInfoCmd(a *App, auth AuthorizationInfo) tea.Cmd {
+	return func() tea.Msg {
+		err := a.insertAuthInfo(auth)
+		return InsertAuthInfoResult{
+			err: err,
+		}
+	}
 }
 
 func RenewRefreshTokenTick(a *App, auth AuthorizationInfo) tea.Cmd {
@@ -1328,8 +1434,13 @@ func (m authorizeClientMsg) Err() error {
 	return m.err
 }
 
+func (m authorizeClientMsg) name() string {
+	return "authorizeClientMsg"
+}
+
 func AuthorizeClientCmd(a *App) tea.Cmd {
 	return func() tea.Msg {
+		logger.Debug("running Authorize client cmd", "command", "AuthorizeClientCmd")
 		ctx := defaultAuthorizationCtx(a)
 		resp, err := a.client.Authorize(ctx)
 
@@ -1409,6 +1520,36 @@ func (a *App) refreshTokens() error {
 
 func getExpiresAtTime(expiresIn int) time.Time {
 	return time.Now().Add(time.Duration(expiresIn)*time.Second)
+}
+
+func (a *App) insertAuthInfo(auth AuthorizationInfo) error {
+	e := auth.expiresAt.Format(time.UnixDate)
+	insertParams := database.InsertConfigParams{
+		AccessToken: sql.NullString{
+			Valid: true,
+			String: auth.accessToken,
+		},
+		RefreshToken: sql.NullString{
+			Valid: true,
+			String: auth.refreshToken,
+		},
+		ExpiresAt: sql.NullString{
+			Valid: true,
+			String: e,
+		},
+		Authorized: true,
+		RedirectUri: auth.redirectUri,
+		ClientSecret: auth.clientSecret,
+		ClientID: auth.clientId,
+	}
+
+	queries := database.New(a.db)
+
+	if err := queries.InsertConfig(context.Background(), insertParams); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (a *App) updateConfigDb(auth AuthorizationInfo) error {
